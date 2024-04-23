@@ -949,6 +949,11 @@ type tableAndLength struct {
 	length uint64
 }
 
+type tableinfo struct {
+	add    uint64
+	delete uint64
+}
+
 func (data *CheckpointData) PrintMetaBatch() {
 	bat := data.bats[MetaIDX]
 	tables := make([]*tableAndLength, 0)
@@ -981,21 +986,45 @@ func (data *CheckpointData) PrintMetaBatch() {
 	/*for i := range tables {
 		logutil.Infof("sss table %d, length is %d", tables[i].tid, tables[i].length)
 	}*/
-	logutil.Infof("lalala max table %d, length is %d", maxTable.tid, maxTable.length)
-	ml := data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_MetaLoc)
-	files := make(map[string]uint64)
-	for i := 0; i < ml.Length(); i++ {
-		loc := BlockLocation(ml.Get(i).([]byte))
-		name := loc.GetLocation().Name()
-		if files[name.String()] == 0 {
-			files[name.String()] = 0
+	for i := range tables {
+		if tables[i].length > 10000 {
+			logutil.Infof("lalala111 table %d, length is %d", tables[i].tid, tables[i].length)
 		}
-		files[name.String()] += uint64(loc.GetLocation().Extent().Length())
+	}
+	logutil.Infof("lalala max table %d, length is %d", maxTable.tid, maxTable.length)
+	insTableIDs := vector.MustFixedCol[uint64](data.bats[ObjectInfoIDX].GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
+	insCreateTSs := vector.MustFixedCol[types.TS](data.bats[ObjectInfoIDX].GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector())
+	insDeleteTSs := vector.MustFixedCol[types.TS](data.bats[ObjectInfoIDX].GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
+	insStates := vector.MustFixedCol[bool](data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_State).GetDownstreamVector())
+	files := make(map[uint64]*tableinfo)
+	row := 0
+	for i := data.bats[ObjectInfoIDX].Length() - 1; i > 0; i-- {
+		if files[insTableIDs[i]] == nil {
+			files[insTableIDs[i]] = &tableinfo{}
+		}
+		ts := insCreateTSs[i]
+		deleteTs := insDeleteTSs[i]
+		if deleteTs.IsEmpty() {
+			files[insTableIDs[i]].add++
+		} else {
+			files[insTableIDs[i]].delete++
+		}
+		if insTableIDs[i] == 272457 && row < 10000 {
+			var objectStats objectio.ObjectStats
+			buf := data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
+			objectStats.UnMarshal(buf)
+			//if objectStats.Rows() < 2000 {
+			logutil.Infof("table id: %d, object name: %v, row: %d, block count: %d, ts %v, origin size: %d, isAObject: %v, delete ts: %v",
+				insTableIDs[i], objectStats.ObjectName().String(), objectStats.Rows(), objectStats.BlkCnt(), ts.ToString(),
+				objectStats.OriginSize(), insStates[i], deleteTs.ToString())
+			//}
+			row++
+		}
 	}
 
-	for name, size := range files {
-		if size > 100000000 {
-			logutil.Infof("lalala file %s, size is %d", name, size)
+	for tid, count := range files {
+		if tid == 272457 {
+			logutil.Infof("table id: %d, object add count: %d, delete count: %d", tid, count.add, count.delete)
 		}
 	}
 }
