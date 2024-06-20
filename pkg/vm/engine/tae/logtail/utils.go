@@ -950,6 +950,7 @@ type tableAndLength struct {
 }
 
 type tableinfo struct {
+	tid    uint64
 	add    uint64
 	delete uint64
 }
@@ -991,6 +992,24 @@ func (data *CheckpointData) PrintMetaBatch() {
 			logutil.Infof("lalala111 table %d, length is %d", tables[i].tid, tables[i].length)
 		}
 	}
+	tombstone := make(map[string]struct{})
+	for i := 0; i < data.bats[BLKMetaInsertIDX].Length(); i++ {
+		deltaLoc := objectio.Location(
+			data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		if _, ok := tombstone[deltaLoc.Name().String()]; !ok {
+			tombstone[deltaLoc.Name().String()] = struct{}{}
+		}
+	}
+	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
+		deltaLoc := objectio.Location(
+			data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		if deltaLoc.IsEmpty() {
+			panic(fmt.Sprintf("block %v deltaLoc is empty", deltaLoc.String()))
+		}
+		if _, ok := tombstone[deltaLoc.Name().String()]; !ok {
+			tombstone[deltaLoc.Name().String()] = struct{}{}
+		}
+	}
 	logutil.Infof("lalala max table %d, length is %d", maxTable.tid, maxTable.length)
 	insTableIDs := vector.MustFixedCol[uint64](data.bats[ObjectInfoIDX].GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
 	insCreateTSs := vector.MustFixedCol[types.TS](data.bats[ObjectInfoIDX].GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector())
@@ -1000,7 +1019,9 @@ func (data *CheckpointData) PrintMetaBatch() {
 	row := 0
 	for i := data.bats[ObjectInfoIDX].Length() - 1; i > 0; i-- {
 		if files[insTableIDs[i]] == nil {
-			files[insTableIDs[i]] = &tableinfo{}
+			files[insTableIDs[i]] = &tableinfo{
+				tid: insTableIDs[i],
+			}
 		}
 		ts := insCreateTSs[i]
 		deleteTs := insDeleteTSs[i]
@@ -1014,7 +1035,7 @@ func (data *CheckpointData) PrintMetaBatch() {
 			buf := data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
 			objectStats.UnMarshal(buf)
 			//if objectStats.Rows() < 2000 {
-			logutil.Infof("table id: %d, object name: %v, row: %d, block count: %d, ts %v, origin size: %d, isAObject: %v, delete ts: %v",
+			logutil.Debugf("table id: %d, object name: %v, row: %d, block count: %d, ts %v, origin size: %d, isAObject: %v, delete ts: %v",
 				insTableIDs[i], objectStats.ObjectName().String(), objectStats.Rows(), objectStats.BlkCnt(), ts.ToString(),
 				objectStats.OriginSize(), insStates[i], deleteTs.ToString())
 			//}
@@ -1022,11 +1043,26 @@ func (data *CheckpointData) PrintMetaBatch() {
 		}
 	}
 
-	for tid, count := range files {
-		if tid == 272457 {
-			logutil.Infof("table id: %d, object add count: %d, delete count: %d", tid, count.add, count.delete)
-		}
+	tableinfos := make([]*tableinfo, 0)
+	objectCount := uint64(0)
+	addCount := uint64(0)
+	deleteCount := uint64(0)
+	for _, count := range files {
+		tableinfos = append(tableinfos, count)
+		objectCount += count.add
+		addCount += count.add
+		objectCount += count.delete
+		deleteCount += count.delete
+		//if tid == 272457 {
+		//}
 	}
+	sort.Slice(tableinfos, func(i, j int) bool {
+		return tableinfos[i].add > tableinfos[j].add
+	})
+	for i := 0; i < 1000; i++ {
+		logutil.Infof("table id: %d, object add count: %d, delete count: %d", tableinfos[i].tid, tableinfos[i].add, tableinfos[i].delete)
+	}
+	logutil.Infof("table count %d, objectCount %d(add: %d,delete: %d), tombstone count %d", len(tableinfos), objectCount, addCount, deleteCount, len(tombstone))
 }
 
 func (data *CNCheckpointData) PrefetchMetaIdx(
