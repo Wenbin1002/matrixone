@@ -80,6 +80,7 @@ func WithDiskTTL(diskTTL time.Duration) Option {
 }
 
 type TransferHashPage struct {
+	latch sync.Mutex
 	common.RefHelper
 	bornTS      time.Time
 	id          *common.ID // not include blk offset
@@ -197,11 +198,15 @@ func (page *TransferHashPage) Transfer(from uint32) (dest types.Rowid, ok bool) 
 }
 
 func (page *TransferHashPage) Marshal() []byte {
+	page.latch.Lock()
+	defer page.latch.Unlock()
 	data, _ := proto.Marshal(&page.hashmap)
 	return data
 }
 
 func (page *TransferHashPage) Unmarshal(data []byte) error {
+	page.latch.Lock()
+	defer page.latch.Unlock()
 	err := proto.Unmarshal(data, &page.hashmap)
 	return err
 }
@@ -211,6 +216,8 @@ func (page *TransferHashPage) SetLocation(location objectio.Location) {
 }
 
 func (page *TransferHashPage) clearTable() {
+	page.latch.Lock()
+	defer page.latch.Unlock()
 	logutil.Infof("[TransferHashPage] clear hash table")
 	clear(page.hashmap.M)
 	atomic.StoreInt32(&page.isPersisted, 1)
