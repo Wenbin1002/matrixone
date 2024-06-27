@@ -92,7 +92,7 @@ type TransferHashPage struct {
 
 func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, opts ...Option) *TransferHashPage {
 	params := TransferHashPageParams{
-		TTL:     10 * time.Second,
+		TTL:     50 * time.Millisecond,
 		DiskTTL: 10 * time.Minute,
 	}
 	for _, opt := range opts {
