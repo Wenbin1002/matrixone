@@ -212,8 +212,8 @@ func (page *TransferHashPage) SetLocation(location objectio.Location) {
 
 func (page *TransferHashPage) clearTable() {
 	logutil.Infof("[TransferHashPage] clear hash table")
-	clear(page.hashmap.M)
 	atomic.StoreInt32(&page.isPersisted, 1)
+	clear(page.hashmap.M)
 }
 
 func (page *TransferHashPage) loadTable() {
