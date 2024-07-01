@@ -953,6 +953,18 @@ type tableinfo struct {
 	tid    uint64
 	add    uint64
 	delete uint64
+	block  uint32
+}
+
+type blockinfo struct {
+	id    string
+	count uint64
+	delta map[string]*deltaLocinfo
+}
+
+type deltaLocinfo struct {
+	loction string
+	count   uint64
 }
 
 func (data *CheckpointData) PrintMetaBatch() {
@@ -993,12 +1005,40 @@ func (data *CheckpointData) PrintMetaBatch() {
 		}
 	}
 	tombstone := make(map[string]struct{})
+	files2 := make(map[uint64]*tableinfo)
+	blockids := make(map[string]*blockinfo)
 	for i := 0; i < data.bats[BLKMetaInsertIDX].Length(); i++ {
 		deltaLoc := objectio.Location(
 			data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
+		tid := data.bats[BLKMetaInsertTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
+		blockID := data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_ID).Get(i).(types.Blockid)
+		if tid == 3779634 {
+			if blockids[blockID.String()] == nil {
+				blockids[blockID.String()] = &blockinfo{
+					id:    blockID.String(),
+					delta: make(map[string]*deltaLocinfo),
+				}
+			}
+			blockids[blockID.String()].count++
+			delta := deltaLoc.String()
+			if blockids[blockID.String()].delta[delta] == nil {
+				blockids[blockID.String()].delta[delta] = &deltaLocinfo{
+					loction: delta,
+				}
+			}
+			blockids[blockID.String()].delta[delta].count++
+		}
+		if files2[tid] == nil {
+			files2[tid] = &tableinfo{
+				tid: tid,
+			}
+		}
 		if _, ok := tombstone[deltaLoc.Name().String()]; !ok {
 			tombstone[deltaLoc.Name().String()] = struct{}{}
+			files2[tid].delete++
 		}
+		files2[tid].add++
+
 	}
 	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
 		deltaLoc := objectio.Location(
@@ -1010,7 +1050,7 @@ func (data *CheckpointData) PrintMetaBatch() {
 			tombstone[deltaLoc.Name().String()] = struct{}{}
 		}
 	}
-	logutil.Infof("lalala max table %d, length is %d", maxTable.tid, maxTable.length)
+	logutil.Infof("lalala max table %d, length is %d, data.bats[BLKMetaInsertIDX] is %d", maxTable.tid, maxTable.length, data.bats[BLKMetaInsertIDX].Length())
 	insTableIDs := vector.MustFixedCol[uint64](data.bats[ObjectInfoIDX].GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
 	insCreateTSs := vector.MustFixedCol[types.TS](data.bats[ObjectInfoIDX].GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector())
 	insDeleteTSs := vector.MustFixedCol[types.TS](data.bats[ObjectInfoIDX].GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
@@ -1030,10 +1070,11 @@ func (data *CheckpointData) PrintMetaBatch() {
 		} else {
 			files[insTableIDs[i]].delete++
 		}
-		if insTableIDs[i] == 272457 && row < 10000 {
+		if files2[insTableIDs[i]] != nil && files2[insTableIDs[i]].add > 100 {
 			var objectStats objectio.ObjectStats
 			buf := data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
 			objectStats.UnMarshal(buf)
+			files2[insTableIDs[i]].block += objectStats.BlkCnt()
 			//if objectStats.Rows() < 2000 {
 			logutil.Debugf("table id: %d, object name: %v, row: %d, block count: %d, ts %v, origin size: %d, isAObject: %v, delete ts: %v",
 				insTableIDs[i], objectStats.ObjectName().String(), objectStats.Rows(), objectStats.BlkCnt(), ts.ToString(),
@@ -1059,8 +1100,45 @@ func (data *CheckpointData) PrintMetaBatch() {
 	sort.Slice(tableinfos, func(i, j int) bool {
 		return tableinfos[i].add > tableinfos[j].add
 	})
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 50; i++ {
 		logutil.Infof("table id: %d, object add count: %d, delete count: %d", tableinfos[i].tid, tableinfos[i].add, tableinfos[i].delete)
+	}
+	tableinfos2 := make([]*tableinfo, 0)
+	objectCount2 := uint64(0)
+	addCount2 := uint64(0)
+	for _, count := range files2 {
+		tableinfos2 = append(tableinfos2, count)
+		objectCount2 += count.add
+		addCount2 += count.add
+	}
+	sort.Slice(tableinfos2, func(i, j int) bool {
+		return tableinfos2[i].add > tableinfos2[j].add
+	})
+
+	for i := 0; i < 8; i++ {
+		logutil.Infof("table id: %d, tombstone row: %d, tombstone count: %d, block count: %d", tableinfos2[i].tid, tableinfos2[i].add, tableinfos2[i].delete, tableinfos2[i].block)
+	}
+
+	blockinfo2 := make([]*blockinfo, 0)
+	for _, block := range blockids {
+		blockinfo2 = append(blockinfo2, block)
+	}
+
+	sort.Slice(blockinfo2, func(i, j int) bool {
+		return blockinfo2[i].count > blockinfo2[j].count
+	})
+
+	for i := 0; i < 50; i++ {
+		logutil.Infof("block id: %s, count: %d", blockinfo2[i].id, blockinfo2[i].count)
+		if len(blockinfo2[i].delta) > 0 {
+			c := 0
+			for _, delta := range blockinfo2[i].delta {
+				if c < 10 {
+					logutil.Debugf("loction: %s, count: %d", delta.loction, delta.count)
+					c++
+				}
+			}
+		}
 	}
 	logutil.Infof("table count %d, objectCount %d(add: %d,delete: %d), tombstone count %d", len(tableinfos), objectCount, addCount, deleteCount, len(tombstone))
 }
