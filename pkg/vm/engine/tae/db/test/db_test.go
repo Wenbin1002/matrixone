@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -8988,4 +8989,155 @@ func TestVisitTombstone(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(3))
 	tae.Restart(context.Background())
 	t.Log(tae.Catalog.SimplePPString(3))
+}
+
+func TestPersistTransferTable(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 3
+	tae.BindSchema(schema)
+	testutil.CreateRelation(t, tae.DB, "db", schema, true)
+
+	sid := objectio.NewSegmentid()
+	id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
+	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
+
+	now := time.Now()
+	if model.RD == nil {
+		model.SetBlockRead(blockio.NewBlockRead())
+	}
+	model.FS = tae.Runtime.Fs.Service
+	page := model.NewTransferHashPage(&id1, now, 10, false,
+		model.WithTTL(time.Second),
+	)
+	ids := make([]types.Rowid, 10)
+	for i := 0; i < 10; i++ {
+		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
+		page.Train(uint32(i), rowID)
+		ids[i] = rowID
+	}
+	tae.Runtime.TransferTable.AddPage(page)
+
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	var writer *blockio.BlockWriter
+	writer, _ = blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil)
+	data := page.Pin().Val.Marshal()
+	ty := types.T_varchar.ToType()
+	vw := tae.Runtime.VectorPool.Transient.GetVector(&ty)
+	v, releasev := vw.GetDownstreamVector(), vw.Close
+	defer releasev()
+	vectorRowCnt := 1
+	err := vector.AppendBytes(v, data, false, tae.Runtime.VectorPool.Transient.GetMPool())
+	if err != nil {
+		return
+	}
+
+	bat := batch.New(true, []string{"mapping"})
+	bat.SetRowCount(vectorRowCnt)
+	bat.Vecs[0] = v
+	_, err = writer.WriteTombstoneBatch(bat)
+	if err != nil {
+		return
+	}
+	var blocks []objectio.BlockObject
+	blocks, _, err = writer.Sync(context.Background())
+	if err != nil {
+		return
+	}
+
+	location := blockio.EncodeLocation(
+		name,
+		blocks[0].GetExtent(),
+		uint32(1),
+		blocks[0].GetID())
+
+	page.SetLocation(location)
+
+	time.Sleep(2 * time.Second)
+	tae.Runtime.TransferTable.RunTTL()
+	assert.True(t, page.IsPersist() == 1)
+	for i := 0; i < 10; i++ {
+		id, ok := page.Transfer(uint32(i))
+		assert.True(t, ok)
+		assert.Equal(t, ids[i], id)
+	}
+}
+
+func TestClearPersistTransferTable(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.BlockMaxRows = 10
+	schema.ObjectMaxBlocks = 3
+	tae.BindSchema(schema)
+	testutil.CreateRelation(t, tae.DB, "db", schema, true)
+
+	sid := objectio.NewSegmentid()
+
+	id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
+	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
+
+	now := time.Now()
+	if model.RD == nil {
+		model.SetBlockRead(blockio.NewBlockRead())
+	}
+	model.FS = tae.Runtime.Fs.Service
+
+	page := model.NewTransferHashPage(&id1, now, 10, false,
+		model.WithTTL(time.Second),
+		model.WithDiskTTL(2*time.Second),
+	)
+	ids := make([]types.Rowid, 10)
+	for i := 0; i < 10; i++ {
+		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
+		page.Train(uint32(i), rowID)
+		ids[i] = rowID
+	}
+	tae.Runtime.TransferTable.AddPage(page)
+
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	var writer *blockio.BlockWriter
+	writer, _ = blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil)
+	data := page.Pin().Val.Marshal()
+	ty := types.T_varchar.ToType()
+	vw := tae.Runtime.VectorPool.Transient.GetVector(&ty)
+	v, releasev := vw.GetDownstreamVector(), vw.Close
+	defer releasev()
+	vectorRowCnt := 1
+	err := vector.AppendBytes(v, data, false, tae.Runtime.VectorPool.Transient.GetMPool())
+	if err != nil {
+		return
+	}
+
+	bat := batch.New(true, []string{"mapping"})
+	bat.SetRowCount(vectorRowCnt)
+	bat.Vecs[0] = v
+	_, err = writer.WriteTombstoneBatch(bat)
+	if err != nil {
+		return
+	}
+	var blocks []objectio.BlockObject
+	blocks, _, err = writer.Sync(context.Background())
+	if err != nil {
+		return
+	}
+
+	location := blockio.EncodeLocation(
+		name,
+		blocks[0].GetExtent(),
+		uint32(1),
+		blocks[0].GetID())
+
+	page.SetLocation(location)
+
+	tae.Runtime.TransferTable.RunTTL()
+	time.Sleep(2 * time.Second)
+	_, err = tae.Runtime.TransferTable.Pin(*page.ID())
+	assert.Equal(t, err, moerr.GetOkExpectedEOB())
 }

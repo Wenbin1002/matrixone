@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"io"
 	"time"
 
@@ -123,6 +125,12 @@ func NewFlushTableTailEntry(
 // add transfer pages for dropped aobjects
 func (entry *flushTableTailEntry) addTransferPages() {
 	isTransient := !entry.tableEntry.GetLastestSchemaLocked().HasPK()
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings.Mappings))
+	var writer *blockio.BlockWriter
+	writer, _ = blockio.NewBlockWriterNew(entry.rt.Fs.Service, name, 0, nil)
+	var duration time.Duration
+	var start time.Time
 	for i, mcontainer := range entry.transMappings.Mappings {
 		m := mcontainer.M
 		if len(m) == 0 {
@@ -130,12 +138,59 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		}
 		id := entry.ablksHandles[i].Fingerprint()
 		entry.pageIds = append(entry.pageIds, id)
+		if model.RD == nil {
+			model.SetBlockRead(blockio.NewBlockRead())
+		}
+		if model.FS == nil {
+			model.SetFileService(entry.rt.Fs.Service)
+		}
 		page := model.NewTransferHashPage(id, time.Now(), len(m), isTransient)
 		for srcRow, dst := range m {
 			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.BlkIdx))
 			page.Train(uint32(srcRow), *objectio.NewRowid(blkid, uint32(dst.RowIdx)))
 		}
+
+		start = time.Now()
+		data := page.Pin().Val.Marshal()
+		t := types.T_varchar.ToType()
+		vw := entry.rt.VectorPool.Transient.GetVector(&t)
+		v, releasev := vw.GetDownstreamVector(), vw.Close
+		defer releasev()
+		vectorRowCnt := 1
+		err := vector.AppendBytes(v, data, false, entry.rt.VectorPool.Transient.GetMPool())
+		if err != nil {
+			return
+		}
+
+		bat := batch.New(true, []string{"mapping"})
+		bat.SetRowCount(vectorRowCnt)
+		bat.Vecs[0] = v
+		_, err = writer.WriteTombstoneBatch(bat)
+		if err != nil {
+			return
+		}
+		duration += time.Since(start)
+
 		entry.rt.TransferTable.AddPage(page)
+		pages = append(pages, page)
+	}
+
+	start = time.Now()
+	var blocks []objectio.BlockObject
+	blocks, _, err := writer.Sync(context.Background())
+	if err != nil {
+		return
+	}
+	duration += time.Since(start)
+	v2.TransferPageFlushLatencyHistogram.Observe(duration.Seconds())
+
+	for i, blk := range blocks {
+		location := blockio.EncodeLocation(
+			name,
+			blk.GetExtent(),
+			uint32(1),
+			blk.GetID())
+		pages[i].SetLocation(location)
 	}
 }
 
@@ -241,7 +296,7 @@ func (entry *flushTableTailEntry) PrepareRollback() (err error) {
 	logutil.Warnf("[FlushTabletail] FT task %d rollback", entry.taskID)
 	// remove transfer page
 	for _, id := range entry.pageIds {
-		entry.rt.TransferTable.DeletePage(id)
+		_ = entry.rt.TransferTable.DeletePage(id)
 	}
 
 	// why not clean TranDel?

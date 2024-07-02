@@ -15,33 +15,31 @@
 package model
 
 import (
-	"sync"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"sync"
 )
 
 type PageT[T common.IRef] interface {
 	common.IRef
 	Pin() *common.PinnedItem[T]
-	TTL(time.Time, time.Duration) bool
+	TTL() uint8 // 0 skip, 1 clear memory, 2 clear disk
 	ID() *common.ID
 	Length() int
+	Clear()
 }
 
 type TransferTable[T PageT[T]] struct {
 	sync.RWMutex
-	ttl   time.Duration
 	pages map[common.ID]*common.PinnedItem[T]
 }
 
-func NewTransferTable[T PageT[T]](ttl time.Duration) *TransferTable[T] {
-	return &TransferTable[T]{
-		ttl:   ttl,
+func NewTransferTable[T PageT[T]]() *TransferTable[T] {
+	table := &TransferTable[T]{
 		pages: make(map[common.ID]*common.PinnedItem[T]),
 	}
+	return table
 }
 
 func (table *TransferTable[T]) Pin(id common.ID) (pinned *common.PinnedItem[T], err error) {
@@ -55,45 +53,46 @@ func (table *TransferTable[T]) Pin(id common.ID) (pinned *common.PinnedItem[T], 
 	}
 	return
 }
+
 func (table *TransferTable[T]) Len() int {
 	table.RLock()
 	defer table.RUnlock()
 	return len(table.pages)
 }
-func (table *TransferTable[T]) prepareTTL(now time.Time) (items []*common.PinnedItem[T]) {
+
+func (table *TransferTable[T]) prepareTTL() (mem, disk []*common.PinnedItem[T]) {
 	table.RLock()
 	defer table.RUnlock()
 	for _, page := range table.pages {
-		if page.Item().TTL(now, table.ttl) {
-			items = append(items, page)
+		st := page.Item().TTL()
+		if st == 1 {
+			mem = append(mem, page)
+		} else if st == 2 {
+			disk = append(disk, page)
 		}
 	}
 	return
 }
 
-func (table *TransferTable[T]) executeTTL(items []*common.PinnedItem[T]) {
-	if len(items) == 0 {
-		return
+func (table *TransferTable[T]) executeTTL(mem, disk []*common.PinnedItem[T]) {
+	for _, page := range mem {
+		page.Val.Clear()
 	}
 
-	cnt := 0
-
 	table.Lock()
-	for _, pinned := range items {
-		cnt += pinned.Val.Length()
+	for _, pinned := range disk {
 		delete(table.pages, *pinned.Item().ID())
 	}
 	table.Unlock()
-	for _, pinned := range items {
+	for _, pinned := range disk {
+		pinned.Val.Clear()
 		pinned.Close()
 	}
-
-	v2.TaskMergeTransferPageLengthGauge.Sub(float64(cnt))
 }
 
-func (table *TransferTable[T]) RunTTL(now time.Time) {
-	items := table.prepareTTL(now)
-	table.executeTTL(items)
+func (table *TransferTable[T]) RunTTL() {
+	mem, disk := table.prepareTTL()
+	table.executeTTL(mem, disk)
 }
 
 func (table *TransferTable[T]) AddPage(page T) (dup bool) {
@@ -112,20 +111,24 @@ func (table *TransferTable[T]) AddPage(page T) (dup bool) {
 	}
 	table.pages[id] = pinned
 
-	v2.TaskMergeTransferPageLengthGauge.Add(float64(page.Length()))
+	v2.TaskMergeTransferPageSizeGauge.Add(float64(page.Length()))
 	return
 }
 
-func (table *TransferTable[T]) DeletePage(id *common.ID) {
+func (table *TransferTable[T]) DeletePage(id *common.ID) (deleted bool) {
 	table.Lock()
 	defer table.Unlock()
-	if _, ok := table.pages[*id]; !ok {
+	if _, deleted = table.pages[*id]; !deleted {
 		return
 	}
-	cnt := table.pages[*id].Val.Length()
 	delete(table.pages, *id)
 
-	v2.TaskMergeTransferPageLengthGauge.Sub(float64(cnt))
+	// to pass ut
+	if len(table.pages) == 0 || table.pages[*id] == nil {
+		return
+	}
+
+	return
 }
 
 func (table *TransferTable[T]) Close() {

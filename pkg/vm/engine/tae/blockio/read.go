@@ -17,6 +17,7 @@ package blockio
 import (
 	"context"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -672,4 +673,23 @@ func FindIntervalForBlock(rowids []types.Rowid, id *types.Blockid) (start int, e
 	}
 	end = i
 	return
+}
+
+type BlockReadImpl struct{}
+
+var (
+	instance *BlockReadImpl
+	once     sync.Once
+)
+
+func (blk *BlockReadImpl) LoadTableByBlock(loc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, release func(), err error) {
+	bat, release, err = LoadTombstoneColumns(context.Background(), []uint16{0}, nil, fs, loc, nil)
+	return bat, release, err
+}
+
+func NewBlockRead() *BlockReadImpl {
+	once.Do(func() {
+		instance = &BlockReadImpl{}
+	})
+	return instance
 }

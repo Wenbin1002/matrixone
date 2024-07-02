@@ -15,7 +15,10 @@
 package txnentries
 
 import (
+	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"math"
 	"sync"
 	"time"
@@ -93,6 +96,12 @@ func NewMergeObjectsEntry(
 func (entry *mergeObjectsEntry) prepareTransferPage() {
 	k := 0
 	for _, obj := range entry.droppedObjs {
+		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+		pages := make([]*model.TransferHashPage, 0, obj.BlockCnt())
+		var writer *blockio.BlockWriter
+		writer, _ = blockio.NewBlockWriterNew(entry.rt.Fs.Service, name, 0, nil)
+		var duration time.Duration
+		var start time.Time
 		for j := 0; j < obj.BlockCnt(); j++ {
 			m := entry.transMappings.Mappings[k].M
 			k++
@@ -103,14 +112,60 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			isTransient := !tblEntry.GetLastestSchema().HasPK()
 			id := obj.AsCommonID()
 			id.SetBlockOffset(uint16(j))
+			if model.RD == nil {
+				model.SetBlockRead(blockio.NewBlockRead())
+			}
+			if model.FS == nil {
+				model.SetFileService(entry.rt.Fs.Service)
+			}
 			page := model.NewTransferHashPage(id, time.Now(), len(m), isTransient)
 			for srcRow, dst := range m {
 				objID := entry.createdObjs[dst.ObjIdx].ID
 				blkID := objectio.NewBlockidWithObjectID(&objID, uint16(dst.BlkIdx))
 				page.Train(uint32(srcRow), *objectio.NewRowid(blkID, uint32(dst.RowIdx)))
 			}
+
+			start = time.Now()
+			data := page.Pin().Val.Marshal()
+			t := types.T_varchar.ToType()
+			vw := entry.rt.VectorPool.Transient.GetVector(&t)
+			v, releasev := vw.GetDownstreamVector(), vw.Close
+			defer releasev()
+			vectorRowCnt := 1
+			err := vector.AppendBytes(v, data, false, entry.rt.VectorPool.Transient.GetMPool())
+			if err != nil {
+				return
+			}
+
+			bat := batch.New(true, []string{"mapping"})
+			bat.SetRowCount(vectorRowCnt)
+			bat.Vecs[0] = v
+			_, err = writer.WriteTombstoneBatch(bat)
+			if err != nil {
+				return
+			}
+			duration += time.Since(start)
+
 			entry.pageIds = append(entry.pageIds, id)
 			_ = entry.rt.TransferTable.AddPage(page)
+			pages = append(pages, page)
+		}
+		start = time.Now()
+		var blocks []objectio.BlockObject
+		blocks, _, err := writer.Sync(context.Background())
+		if err != nil {
+			return
+		}
+		duration += time.Since(start)
+		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
+
+		for i, blk := range blocks {
+			location := blockio.EncodeLocation(
+				name,
+				blk.GetExtent(),
+				uint32(1),
+				blk.GetID())
+			pages[i].SetLocation(location)
 		}
 	}
 	if k != len(entry.transMappings.Mappings) {
@@ -120,7 +175,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 
 func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
 	for _, id := range entry.pageIds {
-		entry.rt.TransferTable.DeletePage(id)
+		_ = entry.rt.TransferTable.DeletePage(id)
 	}
 	entry.pageIds = nil
 	return

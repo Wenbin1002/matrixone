@@ -74,7 +74,10 @@ func initTaskMetrics() {
 	registry.MustRegister(taskGeneratedStuffCounter)
 	registry.MustRegister(taskSelectivityCounter)
 
-	registry.MustRegister(TaskMergeTransferPageLengthGauge)
+	registry.MustRegister(transferPageHitHistogram)
+	registry.MustRegister(TransferPageRowHistogram)
+	registry.MustRegister(TransferPagesInChannelHistogram)
+	registry.MustRegister(TaskMergeTransferPageSizeGauge)
 
 	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
 }
