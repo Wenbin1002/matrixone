@@ -1100,7 +1100,7 @@ func (data *CheckpointData) PrintMetaBatch() {
 	sort.Slice(tableinfos, func(i, j int) bool {
 		return tableinfos[i].add > tableinfos[j].add
 	})
-	for i := 0; i < 50; i++ {
+	for i := 0; i < len(tableinfos) && i < 50; i++ {
 		logutil.Infof("table id: %d, object add count: %d, delete count: %d", tableinfos[i].tid, tableinfos[i].add, tableinfos[i].delete)
 	}
 	tableinfos2 := make([]*tableinfo, 0)
@@ -1115,7 +1115,7 @@ func (data *CheckpointData) PrintMetaBatch() {
 		return tableinfos2[i].add > tableinfos2[j].add
 	})
 
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 8 && i < len(tableinfos2); i++ {
 		logutil.Infof("table id: %d, tombstone row: %d, tombstone count: %d, block count: %d", tableinfos2[i].tid, tableinfos2[i].add, tableinfos2[i].delete, tableinfos2[i].block)
 	}
 
@@ -1128,7 +1128,7 @@ func (data *CheckpointData) PrintMetaBatch() {
 		return blockinfo2[i].count > blockinfo2[j].count
 	})
 
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 50 && i < len(blockinfo2); i++ {
 		logutil.Infof("block id: %s, count: %d", blockinfo2[i].id, blockinfo2[i].count)
 		if len(blockinfo2[i].delta) > 0 {
 			c := 0
