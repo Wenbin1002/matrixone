@@ -19,6 +19,7 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/samples/cmd"
 	"io"
 	"math"
 	"math/rand"
@@ -99,6 +100,9 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 
 	transfer := &transferArg{}
 	rootCmd.AddCommand(transfer.PrepareCommand())
+
+	moObject := &objectArg{}
+	rootCmd.AddCommand(moObject.PrepareCommand())
 
 	return rootCmd
 }
@@ -1434,5 +1438,35 @@ func (c *transferArg) Run() error {
 	}
 	model.SetTTL(time.Duration(c.mem) * time.Second)
 	model.SetDiskTTL(time.Duration(c.disk) * time.Minute)
+	return nil
+}
+
+type objectArg struct {
+}
+
+func (c *objectArg) PrepareCommand() *cobra.Command {
+	objectCmd := &cobra.Command{
+		Use:   "mo_object",
+		Short: "A tool provides object visualization",
+		Run:   RunFactory(c),
+	}
+
+	commands := cmd.GetCommands()
+	for _, command := range commands {
+		objectCmd.AddCommand(command)
+	}
+
+	return objectCmd
+}
+
+func (c *objectArg) FromCommand(cmd *cobra.Command) (err error) {
+	return nil
+}
+
+func (c *objectArg) String() string {
+	return "mo_object"
+}
+
+func (c *objectArg) Run() error {
 	return nil
 }
