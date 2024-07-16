@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cmd
+package objectcmd
 
 import (
 	"fmt"
@@ -31,9 +31,9 @@ var (
 )
 
 const (
-	brief    = 1
-	standard = 2
-	detailed = 3
+	brief    = 0
+	standard = 1
+	detailed = 2
 )
 
 func getInputs(input string, result *[]int) error {

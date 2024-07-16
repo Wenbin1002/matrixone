@@ -19,7 +19,7 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/samples/cmd"
+	objectcmd "github.com/matrixorigin/matrixone/cmd/utils"
 	"io"
 	"math"
 	"math/rand"
@@ -1451,7 +1451,7 @@ func (c *objectArg) PrepareCommand() *cobra.Command {
 		Run:   RunFactory(c),
 	}
 
-	commands := cmd.GetCommands()
+	commands := objectcmd.GetCommands()
 	for _, command := range commands {
 		objectCmd.AddCommand(command)
 	}

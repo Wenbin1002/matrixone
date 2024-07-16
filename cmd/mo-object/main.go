@@ -16,9 +16,10 @@ package main
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/samples/cmd"
-	"github.com/spf13/cobra"
 	"os"
+
+	objectcmd "github.com/matrixorigin/matrixone/cmd/utils"
+	"github.com/spf13/cobra"
 )
 
 func main() {
@@ -27,7 +28,7 @@ func main() {
 		Short: "A tool provides object visualization",
 	}
 
-	commands := cmd.GetCommands()
+	commands := objectcmd.GetCommands()
 	for _, command := range commands {
 		rootCmd.AddCommand(command)
 	}
