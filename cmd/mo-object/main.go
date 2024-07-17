@@ -15,7 +15,7 @@
 package main
 
 import (
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"os"
 
 	"github.com/matrixorigin/matrixone/cmd/utils/objectcmd"
@@ -34,7 +34,7 @@ func main() {
 	}
 
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
+		logutil.Errorf("[objectCmd] error: %s", err)
 		os.Exit(1)
 	}
 }
