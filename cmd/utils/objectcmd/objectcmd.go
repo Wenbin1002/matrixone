@@ -106,7 +106,7 @@ func getStatCmd() *cobra.Command {
 			}
 
 			cmd.OutOrStdout().Write(
-				[]byte(fmt.Sprintf("%v", getStat())),
+				[]byte(getStat()),
 			)
 		},
 	}
@@ -156,18 +156,20 @@ func getBriefStat(obj *objectio.ObjectMeta) string {
 	meta := *obj
 	data, ok := meta.DataMeta()
 	if !ok {
-		return fmt.Sprintf("no data")
+		return "no data"
 	}
 
 	cnt := data.BlockCount()
-	return fmt.Sprintf("object %v has %d blocks", name, cnt)
+	header := data.BlockHeader()
+	ext := reader.GetMetaExtent()
+	return fmt.Sprintf("object %v has %v blocks, %v rows, %v cols, object size %v", name, cnt, header.Rows(), header.ColumnCount(), ext.Length())
 }
 
 func getStandardStat(obj *objectio.ObjectMeta) string {
 	meta := *obj
 	data, ok := meta.DataMeta()
 	if !ok {
-		return fmt.Sprintf("no data")
+		return "no data"
 	}
 
 	var blocks []objectio.BlockObject
@@ -187,7 +189,9 @@ func getStandardStat(obj *objectio.ObjectMeta) string {
 	}
 
 	var res string
-	res += fmt.Sprintf("object %v has %3d blocks\n", name, cnt)
+	header := data.BlockHeader()
+	ext := reader.GetMetaExtent()
+	res += fmt.Sprintf("object %v has %v blocks, %v rows, %v cols, object size %v\n", name, cnt, header.Rows(), header.ColumnCount(), ext.Length())
 	for _, blk := range blocks {
 		res += fmt.Sprintf("block %3d: rows %4v, cols %3v\n", blk.GetID(), blk.GetRows(), blk.GetColumnCount())
 	}
@@ -199,7 +203,7 @@ func getDetailedStat(obj *objectio.ObjectMeta) string {
 	meta := *obj
 	data, ok := meta.DataMeta()
 	if !ok {
-		return fmt.Sprintf("no data")
+		return "no data"
 	}
 
 	var blocks []objectio.BlockObject
@@ -251,7 +255,7 @@ func getGetCmd() *cobra.Command {
 			}
 
 			cmd.OutOrStdout().Write(
-				[]byte(fmt.Sprintf(getData())),
+				[]byte(getData()),
 			)
 		},
 	}
