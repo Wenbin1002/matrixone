@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"os"
 
-	objectcmd "github.com/matrixorigin/matrixone/cmd/utils"
+	"github.com/matrixorigin/matrixone/cmd/utils/objectcmd"
 	"github.com/spf13/cobra"
 )
 

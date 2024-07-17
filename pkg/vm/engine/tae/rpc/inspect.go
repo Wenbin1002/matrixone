@@ -19,7 +19,7 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
-	objectcmd "github.com/matrixorigin/matrixone/cmd/utils"
+	"github.com/matrixorigin/matrixone/cmd/utils/objectcmd"
 	"io"
 	"math"
 	"math/rand"
