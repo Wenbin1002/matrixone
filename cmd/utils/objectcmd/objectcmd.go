@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/spf13/cobra"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -92,12 +91,13 @@ func getStatCmd() *cobra.Command {
 		Use:   "stat",
 		Short: "Perform a stat operation",
 		Run: func(cmd *cobra.Command, args []string) {
-			if level != brief && level != standard && level != detailed {
+			if err := checkStatCmdInputs(); err != nil {
 				cmd.OutOrStdout().Write(
-					[]byte(fmt.Sprintf("invalid level %v, should be 0, 1, 2 ", level)),
+					[]byte(fmt.Sprintf("invalid inputs: %v\n", err)),
 				)
 				return
 			}
+
 			if err := initReader(name); err != nil {
 				cmd.OutOrStdout().Write(
 					[]byte(fmt.Sprintf("fail to init reader %v", err)),
@@ -106,7 +106,7 @@ func getStatCmd() *cobra.Command {
 			}
 
 			cmd.OutOrStdout().Write(
-				[]byte(fmt.Sprintf("%s", getStat())),
+				[]byte(fmt.Sprintf("%v", getStat())),
 			)
 		},
 	}
@@ -118,28 +118,41 @@ func getStatCmd() *cobra.Command {
 	return statCmd
 }
 
+func checkStatCmdInputs() error {
+	if level != brief && level != standard && level != detailed {
+		return fmt.Errorf("invalid level %v, should be 0, 1, 2 ", level)
+	}
+
+	if name == "" {
+		return fmt.Errorf("empty name")
+	}
+
+	return nil
+}
+
 func getStat() (res string) {
 	var err error
 	var m *mpool.MPool
 	var meta objectio.ObjectMeta
 	if m, err = mpool.NewMPool("data", 0, mpool.NoFixed); err != nil {
-		return fmt.Sprintf("fail to init mpool, err %v", err)
+		return fmt.Sprintf("fail to init mpool, err: %v", err)
 	}
 	if meta, err = reader.ReadAllMeta(context.Background(), m); err != nil {
-		return fmt.Sprintf("fail to read meta, err %v", err)
+		return fmt.Sprintf("fail to read meta, err: %v", err)
 	}
+
 	switch level {
 	case brief:
-		res = getBriefStat(&meta, m)
+		res = getBriefStat(&meta)
 	case standard:
-		res = getStandardStat(&meta, m)
+		res = getStandardStat(&meta)
 	case detailed:
-		res = getDetailedStat(&meta, m)
+		res = getDetailedStat(&meta)
 	}
 	return
 }
 
-func getBriefStat(obj *objectio.ObjectMeta, m *mpool.MPool) string {
+func getBriefStat(obj *objectio.ObjectMeta) string {
 	meta := *obj
 	data, ok := meta.DataMeta()
 	if !ok {
@@ -150,7 +163,7 @@ func getBriefStat(obj *objectio.ObjectMeta, m *mpool.MPool) string {
 	return fmt.Sprintf("object %v has %d blocks", name, cnt)
 }
 
-func getStandardStat(obj *objectio.ObjectMeta, m *mpool.MPool) string {
+func getStandardStat(obj *objectio.ObjectMeta) string {
 	meta := *obj
 	data, ok := meta.DataMeta()
 	if !ok {
@@ -182,7 +195,7 @@ func getStandardStat(obj *objectio.ObjectMeta, m *mpool.MPool) string {
 	return res
 }
 
-func getDetailedStat(obj *objectio.ObjectMeta, m *mpool.MPool) string {
+func getDetailedStat(obj *objectio.ObjectMeta) string {
 	meta := *obj
 	data, ok := meta.DataMeta()
 	if !ok {
@@ -223,30 +236,20 @@ func getGetCmd() *cobra.Command {
 		Use:   "get",
 		Short: "Perform a get operation",
 		Run: func(cmd *cobra.Command, args []string) {
-			if err := getInputs(col, &cols); err != nil {
+			if err := checkGecCmdInputs(); err != nil {
 				cmd.OutOrStdout().Write(
-					[]byte(fmt.Sprint(err)),
+					[]byte(fmt.Sprintf("invalid inputs: %v\n", err)),
 				)
 				return
 			}
-			if err := getInputs(row, &rows); err != nil {
-				cmd.OutOrStdout().Write(
-					[]byte(fmt.Sprint(err)),
-				)
-				return
-			}
-			if len(rows) == 1 || len(rows) > 2 || rows[0] >= rows[1] {
-				cmd.OutOrStdout().Write(
-					[]byte(fmt.Sprint("\n invalid rows input, need one or two arguments\n")),
-				)
-				return
-			}
-			sort.Ints(cols)
+
 			if err := initReader(name); err != nil {
 				cmd.OutOrStdout().Write(
-					[]byte(fmt.Sprintf("init reader error: %v", err)),
+					[]byte(fmt.Sprintf("init reader error: %v\n", err)),
 				)
+				return
 			}
+
 			cmd.OutOrStdout().Write(
 				[]byte(fmt.Sprintf(getData())),
 			)
@@ -260,15 +263,32 @@ func getGetCmd() *cobra.Command {
 	return getCmd
 }
 
+func checkGecCmdInputs() error {
+	if err := getInputs(col, &cols); err != nil {
+		return err
+	}
+	if err := getInputs(row, &rows); err != nil {
+		return err
+	}
+	if len(rows) == 1 || len(rows) > 2 || rows[0] >= rows[1] {
+		return fmt.Errorf("invalid rows, need two inputs [leftm, right)")
+	}
+	if name == "" {
+		return fmt.Errorf("empty name")
+	}
+
+	return nil
+}
+
 func getData() string {
 	var err error
 	var m *mpool.MPool
 	var meta objectio.ObjectMeta
 	if m, err = mpool.NewMPool("data", 0, mpool.NoFixed); err != nil {
-		return "fail to init mpool"
+		return fmt.Sprintf("fail to init mpool, err: %v", err)
 	}
 	if meta, err = reader.ReadAllMeta(context.Background(), m); err != nil {
-		return "fail to read meta"
+		return fmt.Sprintf("fail to read meta, err: %v", err)
 	}
 
 	cnt := meta.DataMetaCount()
@@ -308,7 +328,7 @@ func getData() string {
 				return fmt.Sprintf("invalid rows %v, err %v", rows, err)
 			}
 		}
-		res += fmt.Sprintf("col %d:\n%v\n", i, vec.String())
+		res += fmt.Sprintf("col %d:\n%v\n", cols[i], vec.String())
 	}
 
 	return res
