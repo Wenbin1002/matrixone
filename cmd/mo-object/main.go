@@ -15,13 +15,10 @@
 package main
 
 import (
-	"context"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 	"os"
 
-	"github.com/matrixorigin/matrixone/cmd/utils/objectcmd"
 	"github.com/spf13/cobra"
 )
 
@@ -31,19 +28,11 @@ func main() {
 		Short: "A tool provides object visualization",
 	}
 
-	stat := &objectcmd.StatArg{}
-	cfg := fileservice.Config{
-		Name:    defines.SharedFileServiceName,
-		Backend: "DISK",
-		DataDir: defines.SharedFileServiceName,
-		Cache:   fileservice.DisabledCacheConfig,
-	}
-	fs, _ := fileservice.NewFileService(context.Background(), cfg, nil)
-	stat.InitFs(fs)
-	rootCmd.AddCommand(stat.PrepareStatCmd())
+	stat := &rpc.StatArg{}
+	rootCmd.AddCommand(stat.PrepareCmd())
 
-	get := &objectcmd.GetArg{}
-	rootCmd.AddCommand(get.PrepareGetCmd())
+	get := &rpc.GetArg{}
+	rootCmd.AddCommand(get.PrepareCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		logutil.Errorf("[objectCmd] error: %s", err)
