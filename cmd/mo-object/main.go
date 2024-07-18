@@ -15,6 +15,9 @@
 package main
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"os"
 
@@ -28,10 +31,19 @@ func main() {
 		Short: "A tool provides object visualization",
 	}
 
-	commands := objectcmd.GetCommands()
-	for _, command := range commands {
-		rootCmd.AddCommand(command)
+	stat := &objectcmd.StatArg{}
+	cfg := fileservice.Config{
+		Name:    defines.SharedFileServiceName,
+		Backend: "DISK",
+		DataDir: defines.SharedFileServiceName,
+		Cache:   fileservice.DisabledCacheConfig,
 	}
+	fs, _ := fileservice.NewFileService(context.Background(), cfg, nil)
+	stat.InitFs(fs)
+	rootCmd.AddCommand(stat.PrepareStatCmd())
+
+	get := &objectcmd.GetArg{}
+	rootCmd.AddCommand(get.PrepareGetCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		logutil.Errorf("[objectCmd] error: %s", err)

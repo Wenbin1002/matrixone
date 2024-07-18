@@ -1442,6 +1442,9 @@ func (c *transferArg) Run() error {
 }
 
 type objectArg struct {
+	ctx  *inspectContext
+	stat *objectcmd.StatArg
+	get  *objectcmd.GetArg
 }
 
 func (c *objectArg) PrepareCommand() *cobra.Command {
@@ -1451,10 +1454,11 @@ func (c *objectArg) PrepareCommand() *cobra.Command {
 		Run:   RunFactory(c),
 	}
 
-	commands := objectcmd.GetCommands()
-	for _, command := range commands {
-		objectCmd.AddCommand(command)
-	}
+	c.stat = &objectcmd.StatArg{}
+	objectCmd.AddCommand(c.stat.PrepareStatCmd())
+
+	c.get = &objectcmd.GetArg{}
+	objectCmd.AddCommand(c.get.PrepareGetCmd())
 
 	return objectCmd
 }
