@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -52,7 +53,6 @@ func main() {
 	rootCmd.AddCommand(get.PrepareCmd())
 
 	if err := rootCmd.Execute(); err != nil {
-		logutil.Errorf("[objectCmd] error: %s", err)
 		os.Exit(1)
 	}
 }
@@ -92,7 +92,7 @@ func getInputs(input string, result *[]int) error {
 		item = strings.TrimSpace(item)
 		num, err := strconv.Atoi(item)
 		if err != nil {
-			return fmt.Errorf("invalid number '%s'", item)
+			return moerr.NewInfoNoCtx(fmt.Sprintf("invalid number '%s'", item))
 		}
 		*result = append(*result, num)
 	}
@@ -136,11 +136,11 @@ func (c *StatArg) String() string {
 
 func (c *StatArg) Run() (err error) {
 	if err = c.checkInputs(); err != nil {
-		return fmt.Errorf("invalid inputs: %v\n", err)
+		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid inputs: %v\n", err))
 	}
 
 	if err = c.InitReader(c.name, c.fs); err != nil {
-		return fmt.Errorf("fail to init reader %v", err)
+		return moerr.NewInfoNoCtx(fmt.Sprintf("fail to init reader %v", err))
 	}
 
 	c.res, err = c.GetStat()
@@ -167,11 +167,11 @@ func (c *StatArg) InitReader(name string, fs fileservice.FileService) (err error
 
 func (c *StatArg) checkInputs() error {
 	if c.level != brief && c.level != standard && c.level != detailed {
-		return fmt.Errorf("invalid level %v, should be 0, 1, 2 ", c.level)
+		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid level %v, should be 0, 1, 2 ", c.level))
 	}
 
 	if c.name == "" {
-		return fmt.Errorf("empty name")
+		return moerr.NewInfoNoCtx(fmt.Sprintf("empty name"))
 	}
 
 	return nil
@@ -181,11 +181,11 @@ func (c *StatArg) GetStat() (res string, err error) {
 	var m *mpool.MPool
 	var meta objectio.ObjectMeta
 	if m, err = mpool.NewMPool("data", 0, mpool.NoFixed); err != nil {
-		err = fmt.Errorf("fail to init mpool, err: %v", err)
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("fail to init mpool, err: %v", err))
 		return
 	}
 	if meta, err = c.reader.ReadAllMeta(context.Background(), m); err != nil {
-		err = fmt.Errorf("fail to read meta, err: %v", err)
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("fail to read meta, err: %v", err))
 		return
 	}
 
@@ -204,7 +204,7 @@ func (c *StatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err error)
 	meta := *obj
 	data, ok := meta.DataMeta()
 	if !ok {
-		err = fmt.Errorf("no data")
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("no data"))
 		return
 	}
 
@@ -220,7 +220,7 @@ func (c *StatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, err err
 	meta := *obj
 	data, ok := meta.DataMeta()
 	if !ok {
-		err = fmt.Errorf("no data")
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("no data"))
 		return
 	}
 
@@ -230,7 +230,7 @@ func (c *StatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, err err
 	if c.id != invalidId {
 		println(uint32(c.id))
 		if uint32(c.id) > cnt {
-			err = fmt.Errorf("id %3d out of block count %3d", c.id, cnt)
+			err = moerr.NewInfoNoCtx(fmt.Sprintf("id %3d out of block count %3d", c.id, cnt))
 			return
 		}
 		blocks = append(blocks, data.GetBlockMeta(uint32(c.id)))
@@ -255,7 +255,7 @@ func (c *StatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, err err
 	meta := *obj
 	data, ok := meta.DataMeta()
 	if !ok {
-		err = fmt.Errorf("no data")
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("no data"))
 		return
 	}
 
@@ -263,7 +263,7 @@ func (c *StatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, err err
 	cnt := data.BlockCount()
 	if c.id != invalidId {
 		if uint32(c.id) >= cnt {
-			err = fmt.Errorf("id %v out of block count %v", c.id, cnt)
+			err = moerr.NewInfoNoCtx(fmt.Sprintf("id %v out of block count %v", c.id, cnt))
 			return
 		}
 		blocks = append(blocks, data.GetBlockMeta(uint32(c.id)))
@@ -327,11 +327,11 @@ func (c *GetArg) String() string {
 
 func (c *GetArg) Run() (err error) {
 	if err = c.checkInputs(); err != nil {
-		return fmt.Errorf("invalid inputs: %v\n", err)
+		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid inputs: %v\n", err))
 	}
 
 	if err = c.InitReader(c.name, c.fs); err != nil {
-		return fmt.Errorf("fail to init reader: %v", err)
+		return moerr.NewInfoNoCtx(fmt.Sprintf("fail to init reader: %v", err))
 	}
 
 	c.res, err = c.GetData()
@@ -364,10 +364,10 @@ func (c *GetArg) checkInputs() error {
 		return err
 	}
 	if len(c.rows) > 2 || (len(c.rows) == 2 && c.rows[0] >= c.rows[1]) {
-		return fmt.Errorf("invalid rows, need two inputs [leftm, right)")
+		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid rows, need two inputs [leftm, right)"))
 	}
 	if c.name == "" {
-		return fmt.Errorf("empty name")
+		return moerr.NewInfoNoCtx(fmt.Sprintf("empty name"))
 	}
 
 	return nil
@@ -377,17 +377,17 @@ func (c *GetArg) GetData() (res string, err error) {
 	var m *mpool.MPool
 	var meta objectio.ObjectMeta
 	if m, err = mpool.NewMPool("data", 0, mpool.NoFixed); err != nil {
-		err = fmt.Errorf("fail to init mpool, err: %v", err)
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("fail to init mpool, err: %v", err))
 		return
 	}
 	if meta, err = c.reader.ReadAllMeta(context.Background(), m); err != nil {
-		err = fmt.Errorf("fail to read meta, err: %v", err)
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("fail to read meta, err: %v", err))
 		return
 	}
 
 	cnt := meta.DataMetaCount()
 	if c.id == invalidId || uint16(c.id) >= cnt {
-		err = fmt.Errorf("invalid id")
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("invalid id"))
 		return
 	}
 
@@ -404,7 +404,7 @@ func (c *GetArg) GetData() (res string, err error) {
 	for _, i := range c.cols {
 		idx := uint16(i)
 		if idx >= cnt {
-			err = fmt.Errorf("column %v out of colum count %v", idx, cnt)
+			err = moerr.NewInfoNoCtx(fmt.Sprintf("column %v out of colum count %v", idx, cnt))
 			return
 		}
 		col := blk.ColumnMeta(idx)
@@ -426,7 +426,7 @@ func (c *GetArg) GetData() (res string, err error) {
 				right = c.rows[1]
 			}
 			if uint32(left) >= blk.GetRows() || uint32(right) > blk.GetRows() {
-				err = fmt.Errorf("invalid rows %v out of row count %v", c.rows, blk.GetRows())
+				err = moerr.NewInfoNoCtx(fmt.Sprintf("invalid rows %v out of row count %v", c.rows, blk.GetRows()))
 				return
 			}
 			vec, _ = vec.Window(left, right)
