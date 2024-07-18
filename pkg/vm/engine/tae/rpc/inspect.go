@@ -1475,11 +1475,11 @@ func (c *objectArg) String() string {
 func (c *objectArg) Run() (err error) {
 	db, err := c.ctx.db.Catalog.GetDatabaseByID(uint64(c.did))
 	if err != nil {
-		return fmt.Errorf("failed to get db %v", c.did)
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get db %v", c.did))
 	}
 	table, err := db.GetTableEntryByID(uint64(c.tid))
 	if err != nil {
-		return fmt.Errorf("failed to get table %v", c.tid)
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get table %v", c.tid))
 	}
 	c.name = table.GetFullName()
 	it := table.MakeObjectIt(true)
