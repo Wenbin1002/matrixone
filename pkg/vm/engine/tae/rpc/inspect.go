@@ -100,6 +100,9 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 	transfer := &transferArg{}
 	rootCmd.AddCommand(transfer.PrepareCommand())
 
+	obj := &objectArg{}
+	rootCmd.AddCommand(obj.PrepareCommand())
+
 	return rootCmd
 }
 
@@ -1438,4 +1441,78 @@ func (c *transferArg) Run() error {
 	model.SetTTL(time.Duration(c.mem) * time.Second)
 	model.SetDiskTTL(time.Duration(c.disk) * time.Minute)
 	return nil
+}
+
+type objectArg struct {
+	ctx                     *inspectContext
+	did, tid, ori, com, cnt int
+	name                    string
+}
+
+func (c *objectArg) PrepareCommand() *cobra.Command {
+	transferCmd := &cobra.Command{
+		Use:   "mo_object",
+		Short: "mo_object",
+		Run:   RunFactory(c),
+	}
+
+	transferCmd.Flags().IntP("tid", "t", 0, "set table id")
+	transferCmd.Flags().IntP("did", "d", 0, "set database id")
+	return transferCmd
+}
+
+func (c *objectArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.tid, _ = cmd.Flags().GetInt("tid")
+	c.did, _ = cmd.Flags().GetInt("did")
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	return nil
+}
+
+func (c *objectArg) String() string {
+	return fmt.Sprintf("table %v has %v objects, compacted size %v, original size %v", c.name, c.cnt, formatBytes(c.com), formatBytes(c.ori))
+}
+
+func (c *objectArg) Run() (err error) {
+	db, err := c.ctx.db.Catalog.GetDatabaseByID(uint64(c.did))
+	if err != nil {
+		return fmt.Errorf("failed to get db %v", c.did)
+	}
+	table, err := db.GetTableEntryByID(uint64(c.tid))
+	if err != nil {
+		return fmt.Errorf("failed to get table %v", c.tid)
+	}
+	c.name = table.GetFullName()
+	it := table.MakeObjectIt(true)
+	defer it.Release()
+	for it.Next() {
+		entry := it.Item()
+		c.ori += entry.GetOriginSize()
+		c.com += entry.GetCompSize()
+		c.cnt++
+	}
+
+	return
+}
+
+func formatBytes(bytes int) string {
+	const (
+		_      = iota
+		KB int = 1 << (10 * iota)
+		MB
+		GB
+		TB
+	)
+
+	switch {
+	case bytes >= TB:
+		return fmt.Sprintf("%.2f TB", float64(bytes)/float64(TB))
+	case bytes >= GB:
+		return fmt.Sprintf("%.2f GB", float64(bytes)/float64(GB))
+	case bytes >= MB:
+		return fmt.Sprintf("%.2f MB", float64(bytes)/float64(MB))
+	case bytes >= KB:
+		return fmt.Sprintf("%.2f KB", float64(bytes)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
 }
