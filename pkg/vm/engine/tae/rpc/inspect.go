@@ -1448,7 +1448,6 @@ func (c *transferArg) Run() error {
 }
 
 type objectArg struct {
-	ctx *inspectContext
 }
 
 func (c *objectArg) PrepareCommand() *cobra.Command {
