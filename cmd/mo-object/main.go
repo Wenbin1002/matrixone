@@ -38,6 +38,8 @@ const (
 	brief    = 0
 	standard = 1
 	detailed = 2
+
+	dir = "shared"
 )
 
 func main() {
@@ -99,6 +101,16 @@ func getInputs(input string, result *[]int) error {
 	return nil
 }
 
+func InitFs() (fs fileservice.FileService, err error) {
+	cfg := fileservice.Config{
+		Name:    defines.SharedFileServiceName,
+		Backend: "DISK",
+		DataDir: dir,
+		Cache:   fileservice.DisabledCacheConfig,
+	}
+	return fileservice.NewFileService(context.Background(), cfg, nil)
+}
+
 type StatArg struct {
 	level  int
 	name   string
@@ -139,7 +151,7 @@ func (c *StatArg) Run() (err error) {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid inputs: %v\n", err))
 	}
 
-	if err = c.InitReader(c.name, c.fs); err != nil {
+	if err = c.InitReader(c.name); err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("fail to init reader %v", err))
 	}
 
@@ -148,17 +160,10 @@ func (c *StatArg) Run() (err error) {
 	return
 }
 
-func (c *StatArg) InitReader(name string, fs fileservice.FileService) (err error) {
-	if fs == nil {
-		cfg := fileservice.Config{
-			Name:    defines.SharedFileServiceName,
-			Backend: "DISK",
-			DataDir: defines.SharedFileServiceName,
-			Cache:   fileservice.DisabledCacheConfig,
-		}
-		if fs, err = fileservice.NewFileService(context.Background(), cfg, nil); err != nil {
-			return err
-		}
+func (c *StatArg) InitReader(name string) (err error) {
+	fs, err := InitFs()
+	if err != nil {
+		return err
 	}
 	c.reader, err = objectio.NewObjectReaderWithStr(name, fs)
 
@@ -171,7 +176,7 @@ func (c *StatArg) checkInputs() error {
 	}
 
 	if c.name == "" {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("empty name"))
+		return moerr.NewInfoNoCtx(fmt.Sprint("empty name"))
 	}
 
 	return nil
@@ -204,7 +209,7 @@ func (c *StatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err error)
 	meta := *obj
 	data, ok := meta.DataMeta()
 	if !ok {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("no data"))
+		err = moerr.NewInfoNoCtx(fmt.Sprint("no data"))
 		return
 	}
 
@@ -220,7 +225,7 @@ func (c *StatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, err err
 	meta := *obj
 	data, ok := meta.DataMeta()
 	if !ok {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("no data"))
+		err = moerr.NewInfoNoCtx(fmt.Sprint("no data"))
 		return
 	}
 
@@ -255,7 +260,7 @@ func (c *StatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, err err
 	meta := *obj
 	data, ok := meta.DataMeta()
 	if !ok {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("no data"))
+		err = moerr.NewInfoNoCtx(fmt.Sprint("no data"))
 		return
 	}
 
@@ -330,7 +335,7 @@ func (c *GetArg) Run() (err error) {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid inputs: %v\n", err))
 	}
 
-	if err = c.InitReader(c.name, c.fs); err != nil {
+	if err = c.InitReader(c.name); err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("fail to init reader: %v", err))
 	}
 
@@ -339,17 +344,10 @@ func (c *GetArg) Run() (err error) {
 	return
 }
 
-func (c *GetArg) InitReader(name string, fs fileservice.FileService) (err error) {
-	if fs == nil {
-		cfg := fileservice.Config{
-			Name:    defines.SharedFileServiceName,
-			Backend: "DISK",
-			DataDir: defines.SharedFileServiceName,
-			Cache:   fileservice.DisabledCacheConfig,
-		}
-		if fs, err = fileservice.NewFileService(context.Background(), cfg, nil); err != nil {
-			return err
-		}
+func (c *GetArg) InitReader(name string) (err error) {
+	fs, err := InitFs()
+	if err != nil {
+		return err
 	}
 	c.reader, err = objectio.NewObjectReaderWithStr(name, fs)
 
@@ -364,10 +362,10 @@ func (c *GetArg) checkInputs() error {
 		return err
 	}
 	if len(c.rows) > 2 || (len(c.rows) == 2 && c.rows[0] >= c.rows[1]) {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid rows, need two inputs [leftm, right)"))
+		return moerr.NewInfoNoCtx(fmt.Sprint("invalid rows, need two inputs [leftm, right)"))
 	}
 	if c.name == "" {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("empty name"))
+		return moerr.NewInfoNoCtx(fmt.Sprint("empty name"))
 	}
 
 	return nil
@@ -387,7 +385,7 @@ func (c *GetArg) GetData() (res string, err error) {
 
 	cnt := meta.DataMetaCount()
 	if c.id == invalidId || uint16(c.id) >= cnt {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("invalid id"))
+		err = moerr.NewInfoNoCtx(fmt.Sprint("invalid id"))
 		return
 	}
 
