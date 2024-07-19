@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"os"
 	"strconv"
@@ -39,7 +38,8 @@ const (
 	standard = 1
 	detailed = 2
 
-	dir = "shared"
+	localDir  = "local"
+	sharedDir = "shared"
 )
 
 func main() {
@@ -101,23 +101,32 @@ func getInputs(input string, result *[]int) error {
 	return nil
 }
 
-func InitFs() (fs fileservice.FileService, err error) {
-	cfg := fileservice.Config{
-		Name:    defines.SharedFileServiceName,
-		Backend: "DISK",
-		DataDir: dir,
-		Cache:   fileservice.DisabledCacheConfig,
+func InitFs(local bool) (fs fileservice.FileService, err error) {
+	if local {
+		cfg := fileservice.Config{
+			Name:    defines.LocalFileServiceName,
+			Backend: "DISK",
+			DataDir: localDir,
+			Cache:   fileservice.DisabledCacheConfig,
+		}
+		return fileservice.NewFileService(context.Background(), cfg, nil)
 	}
-	return fileservice.NewFileService(context.Background(), cfg, nil)
+
+	arg := fileservice.ObjectStorageArguments{
+		Name:     defines.SharedFileServiceName,
+		Endpoint: "disk",
+		Bucket:   sharedDir,
+	}
+	return fileservice.NewS3FS(context.Background(), arg, fileservice.DisabledCacheConfig, nil, false, true)
 }
 
 type StatArg struct {
 	level  int
 	name   string
 	id     int
-	fs     fileservice.FileService
 	reader *objectio.ObjectReader
 	res    string
+	local  bool
 }
 
 func (c *StatArg) PrepareCmd() *cobra.Command {
@@ -138,7 +147,6 @@ func (c *StatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.id, _ = cmd.Flags().GetInt("id")
 	c.name, _ = cmd.Flags().GetString("name")
 
-	logutil.Infof("objectcmd fs %v", c.fs)
 	return nil
 }
 
@@ -161,7 +169,7 @@ func (c *StatArg) Run() (err error) {
 }
 
 func (c *StatArg) InitReader(name string) (err error) {
-	fs, err := InitFs()
+	fs, err := InitFs(c.local)
 	if err != nil {
 		return err
 	}
@@ -176,7 +184,7 @@ func (c *StatArg) checkInputs() error {
 	}
 
 	if c.name == "" {
-		return moerr.NewInfoNoCtx(fmt.Sprint("empty name"))
+		return moerr.NewInfoNoCtx("empty name")
 	}
 
 	return nil
@@ -209,7 +217,7 @@ func (c *StatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err error)
 	meta := *obj
 	data, ok := meta.DataMeta()
 	if !ok {
-		err = moerr.NewInfoNoCtx(fmt.Sprint("no data"))
+		err = moerr.NewInfoNoCtx("no data")
 		return
 	}
 
@@ -225,7 +233,7 @@ func (c *StatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, err err
 	meta := *obj
 	data, ok := meta.DataMeta()
 	if !ok {
-		err = moerr.NewInfoNoCtx(fmt.Sprint("no data"))
+		err = moerr.NewInfoNoCtx("no data")
 		return
 	}
 
@@ -260,7 +268,7 @@ func (c *StatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, err err
 	meta := *obj
 	data, ok := meta.DataMeta()
 	if !ok {
-		err = moerr.NewInfoNoCtx(fmt.Sprint("no data"))
+		err = moerr.NewInfoNoCtx("no data")
 		return
 	}
 
@@ -298,9 +306,9 @@ type GetArg struct {
 	id         int
 	cols, rows []int
 	col, row   string
-	fs         fileservice.FileService
 	reader     *objectio.ObjectReader
 	res        string
+	local      bool
 }
 
 func (c *GetArg) PrepareCmd() *cobra.Command {
@@ -345,7 +353,7 @@ func (c *GetArg) Run() (err error) {
 }
 
 func (c *GetArg) InitReader(name string) (err error) {
-	fs, err := InitFs()
+	fs, err := InitFs(c.local)
 	if err != nil {
 		return err
 	}
@@ -362,10 +370,10 @@ func (c *GetArg) checkInputs() error {
 		return err
 	}
 	if len(c.rows) > 2 || (len(c.rows) == 2 && c.rows[0] >= c.rows[1]) {
-		return moerr.NewInfoNoCtx(fmt.Sprint("invalid rows, need two inputs [leftm, right)"))
+		return moerr.NewInfoNoCtx("invalid rows, need two inputs [leftm, right)")
 	}
 	if c.name == "" {
-		return moerr.NewInfoNoCtx(fmt.Sprint("empty name"))
+		return moerr.NewInfoNoCtx("empty name")
 	}
 
 	return nil
@@ -385,7 +393,7 @@ func (c *GetArg) GetData() (res string, err error) {
 
 	cnt := meta.DataMetaCount()
 	if c.id == invalidId || uint16(c.id) >= cnt {
-		err = moerr.NewInfoNoCtx(fmt.Sprint("invalid id"))
+		err = moerr.NewInfoNoCtx("invalid id")
 		return
 	}
 
