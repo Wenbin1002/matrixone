@@ -27,6 +27,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -1537,28 +1538,10 @@ func getInputs(input string, result *[]int) error {
 	return nil
 }
 
-func initFs(local bool) (fs fileservice.FileService, err error) {
-	if local {
-		cfg := fileservice.Config{
-			Name:    defines.LocalFileServiceName,
-			Backend: "DISK",
-			DataDir: localDir,
-			Cache:   fileservice.DisabledCacheConfig,
-		}
-		return fileservice.NewFileService(context.Background(), cfg, nil)
-	}
-
-	arg := fileservice.ObjectStorageArguments{
-		Name:     defines.SharedFileServiceName,
-		Endpoint: "disk",
-		Bucket:   sharedDir,
-	}
-	return fileservice.NewS3FS(context.Background(), arg, fileservice.DisabledCacheConfig, nil, false, true)
-}
-
 type moObjStatArg struct {
 	ctx    *inspectContext
 	level  int
+	dir    string
 	name   string
 	id     int
 	fs     fileservice.FileService
@@ -1584,9 +1567,10 @@ func (c *moObjStatArg) PrepareCommand() *cobra.Command {
 
 func (c *moObjStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.id, _ = cmd.Flags().GetInt("id")
-	c.name, _ = cmd.Flags().GetString("name")
 	c.level, _ = cmd.Flags().GetInt("level")
 	c.local, _ = cmd.Flags().GetBool("local")
+	path, _ := cmd.Flags().GetString("name")
+	c.dir, c.name = filepath.Split(path)
 	if cmd.Flag("ictx") != nil {
 		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 
@@ -1608,7 +1592,7 @@ func (c *moObjStatArg) Run() (err error) {
 		c.fs = c.ctx.db.Runtime.Fs.Service
 	}
 
-	if err = c.InitReader(c.name, c.fs); err != nil {
+	if err = c.InitReader(c.name); err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader %v", err))
 	}
 
@@ -1617,15 +1601,36 @@ func (c *moObjStatArg) Run() (err error) {
 	return
 }
 
-func (c *moObjStatArg) InitReader(name string, fs fileservice.FileService) (err error) {
-	if fs == nil {
-		fs, err = initFs(c.local)
+func (c *moObjStatArg) initFs(local bool) (err error) {
+	if local {
+		cfg := fileservice.Config{
+			Name:    defines.LocalFileServiceName,
+			Backend: "DISK",
+			DataDir: c.dir,
+			Cache:   fileservice.DisabledCacheConfig,
+		}
+		c.fs, err = fileservice.NewFileService(context.Background(), cfg, nil)
+		return
+	}
+
+	arg := fileservice.ObjectStorageArguments{
+		Name:     defines.SharedFileServiceName,
+		Endpoint: "DISK",
+		Bucket:   c.dir,
+	}
+	c.fs, err = fileservice.NewS3FS(context.Background(), arg, fileservice.DisabledCacheConfig, nil, false, true)
+	return
+}
+
+func (c *moObjStatArg) InitReader(name string) (err error) {
+	if c.fs == nil {
+		err = c.initFs(c.local)
 		if err != nil {
 			return err
 		}
 	}
 
-	c.reader, err = objectio.NewObjectReaderWithStr(name, fs)
+	c.reader, err = objectio.NewObjectReaderWithStr(name, c.fs)
 
 	return err
 }
@@ -1755,6 +1760,7 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 
 type objGetArg struct {
 	ctx        *inspectContext
+	dir        string
 	name       string
 	id         int
 	cols, rows []int
@@ -1782,10 +1788,11 @@ func (c *objGetArg) PrepareCommand() *cobra.Command {
 
 func (c *objGetArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.id, _ = cmd.Flags().GetInt("id")
-	c.name, _ = cmd.Flags().GetString("name")
 	c.col, _ = cmd.Flags().GetString("col")
 	c.row, _ = cmd.Flags().GetString("row")
 	c.local, _ = cmd.Flags().GetBool("local")
+	path, _ := cmd.Flags().GetString("name")
+	c.dir, c.name = filepath.Split(path)
 	if cmd.Flag("ictx") != nil {
 		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 
@@ -1807,7 +1814,7 @@ func (c *objGetArg) Run() (err error) {
 		c.fs = c.ctx.db.Runtime.Fs.Service
 	}
 
-	if err = c.InitReader(c.name, c.fs); err != nil {
+	if err = c.InitReader(c.name); err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader: %v", err))
 	}
 
@@ -1816,15 +1823,36 @@ func (c *objGetArg) Run() (err error) {
 	return
 }
 
-func (c *objGetArg) InitReader(name string, fs fileservice.FileService) (err error) {
-	if fs == nil {
-		fs, err = initFs(c.local)
+func (c *objGetArg) initFs(local bool) (err error) {
+	if local {
+		cfg := fileservice.Config{
+			Name:    defines.LocalFileServiceName,
+			Backend: "DISK",
+			DataDir: c.dir,
+			Cache:   fileservice.DisabledCacheConfig,
+		}
+		c.fs, err = fileservice.NewFileService(context.Background(), cfg, nil)
+		return
+	}
+
+	arg := fileservice.ObjectStorageArguments{
+		Name:     defines.SharedFileServiceName,
+		Endpoint: "DISK",
+		Bucket:   c.dir,
+	}
+	c.fs, err = fileservice.NewS3FS(context.Background(), arg, fileservice.DisabledCacheConfig, nil, false, true)
+	return
+}
+
+func (c *objGetArg) InitReader(name string) (err error) {
+	if c.fs == nil {
+		err = c.initFs(c.local)
 		if err != nil {
 			return err
 		}
 	}
 
-	c.reader, err = objectio.NewObjectReaderWithStr(name, fs)
+	c.reader, err = objectio.NewObjectReaderWithStr(name, c.fs)
 
 	return err
 }
