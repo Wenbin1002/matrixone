@@ -1516,9 +1516,6 @@ const (
 	brief    = 0
 	standard = 1
 	detailed = 2
-
-	localDir  = "local"
-	sharedDir = "shared"
 )
 
 func getInputs(input string, result *[]int) error {
