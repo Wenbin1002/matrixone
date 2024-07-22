@@ -1609,7 +1609,7 @@ func (c *moObjStatArg) Run() (err error) {
 	}
 
 	if err = c.InitReader(c.name, c.fs); err != nil {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("fail to init reader %v", err))
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader %v", err))
 	}
 
 	c.res, err = c.GetStat()
@@ -1646,11 +1646,11 @@ func (c *moObjStatArg) GetStat() (res string, err error) {
 	var m *mpool.MPool
 	var meta objectio.ObjectMeta
 	if m, err = mpool.NewMPool("data", 0, mpool.NoFixed); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("fail to init mpool, err: %v", err))
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to init mpool, err: %v", err))
 		return
 	}
 	if meta, err = c.reader.ReadAllMeta(context.Background(), m); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("fail to read meta, err: %v", err))
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to read meta, err: %v", err))
 		return
 	}
 
@@ -1808,7 +1808,7 @@ func (c *objGetArg) Run() (err error) {
 	}
 
 	if err = c.InitReader(c.name, c.fs); err != nil {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("fail to init reader: %v", err))
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader: %v", err))
 	}
 
 	c.res, err = c.GetData()
@@ -1850,11 +1850,11 @@ func (c *objGetArg) GetData() (res string, err error) {
 	var m *mpool.MPool
 	var meta objectio.ObjectMeta
 	if m, err = mpool.NewMPool("data", 0, mpool.NoFixed); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("fail to init mpool, err: %v", err))
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to init mpool, err: %v", err))
 		return
 	}
 	if meta, err = c.reader.ReadAllMeta(context.Background(), m); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("fail to read meta, err: %v", err))
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to read meta, err: %v", err))
 		return
 	}
 
@@ -1972,7 +1972,7 @@ func (c *tableStatArg) String() string {
 
 func (c *tableStatArg) Run() (err error) {
 	if c.ctx == nil {
-		return moerr.NewInfoNoCtx("it is a online command")
+		return moerr.NewInfoNoCtx("it is an online command")
 	}
 	db, err := c.ctx.db.Catalog.GetDatabaseByID(uint64(c.did))
 	if err != nil {
