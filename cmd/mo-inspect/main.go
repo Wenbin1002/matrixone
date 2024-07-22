@@ -26,8 +26,11 @@ func main() {
 		Short: "A tool provides object visualization",
 	}
 
-	inspect := rpc.MoInspectArg{}
-	rootCmd.AddCommand(inspect.PrepareCommand())
+	obj := rpc.ObjArg{}
+	rootCmd.AddCommand(obj.PrepareCommand())
+
+	table := rpc.TableArg{}
+	rootCmd.AddCommand(table.PrepareCommand())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

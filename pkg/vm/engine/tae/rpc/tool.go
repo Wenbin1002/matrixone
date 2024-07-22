@@ -88,10 +88,10 @@ func (c *MoInspectArg) PrepareCommand() *cobra.Command {
 		Run:   RunFactory(c),
 	}
 
-	obj := objArg{}
+	obj := ObjArg{}
 	moInspectCmd.AddCommand(obj.PrepareCommand())
 
-	table := tableArg{}
+	table := TableArg{}
 	moInspectCmd.AddCommand(table.PrepareCommand())
 
 	return moInspectCmd
@@ -109,10 +109,10 @@ func (c *MoInspectArg) Run() (err error) {
 	return
 }
 
-type objArg struct {
+type ObjArg struct {
 }
 
-func (c *objArg) PrepareCommand() *cobra.Command {
+func (c *ObjArg) PrepareCommand() *cobra.Command {
 	objCmd := &cobra.Command{
 		Use:   "obj",
 		Short: "obj",
@@ -128,15 +128,15 @@ func (c *objArg) PrepareCommand() *cobra.Command {
 	return objCmd
 }
 
-func (c *objArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *ObjArg) FromCommand(cmd *cobra.Command) (err error) {
 	return nil
 }
 
-func (c *objArg) String() string {
+func (c *ObjArg) String() string {
 	return "obj"
 }
 
-func (c *objArg) Run() (err error) {
+func (c *ObjArg) Run() (err error) {
 	return
 }
 
@@ -540,10 +540,10 @@ func (c *objGetArg) GetData() (res string, err error) {
 	return
 }
 
-type tableArg struct {
+type TableArg struct {
 }
 
-func (c *tableArg) PrepareCommand() *cobra.Command {
+func (c *TableArg) PrepareCommand() *cobra.Command {
 	tableCmd := &cobra.Command{
 		Use:   "table",
 		Short: "table",
@@ -556,15 +556,15 @@ func (c *tableArg) PrepareCommand() *cobra.Command {
 	return tableCmd
 }
 
-func (c *tableArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *TableArg) FromCommand(cmd *cobra.Command) (err error) {
 	return nil
 }
 
-func (c *tableArg) String() string {
+func (c *TableArg) String() string {
 	return "table"
 }
 
-func (c *tableArg) Run() error {
+func (c *TableArg) Run() error {
 	return nil
 }
 
