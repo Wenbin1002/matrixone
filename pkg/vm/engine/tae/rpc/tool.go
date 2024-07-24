@@ -17,6 +17,7 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"github.com/BurntSushi/toml"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/spf13/cobra"
 	"path/filepath"
 	"strconv"
@@ -109,6 +111,25 @@ func formatBytes(bytes uint32) string {
 	default:
 		return fmt.Sprintf("%d B", bytes)
 	}
+}
+
+func s3fs(ctx context.Context, path string) (fs fileservice.FileService, err error) {
+	var cfg fileservice.Config
+
+	if _, err = toml.DecodeFile(path, &cfg); err != nil {
+		return nil, err
+	}
+	if cfg.Backend != "S3" {
+		return nil, moerr.NewInfoNoCtx(fmt.Sprintf("invalid backend '%s'", cfg.Backend))
+	}
+	counterSet := new(perfcounter.CounterSet)
+	return fileservice.NewFileService(
+		ctx,
+		cfg,
+		[]*perfcounter.CounterSet{
+			counterSet,
+		},
+	)
 }
 
 type MoInspectArg struct {
@@ -217,6 +238,7 @@ type moObjStatArg struct {
 	level  int
 	dir    string
 	name   string
+	s3path string
 	id     int
 	fs     fileservice.FileService
 	reader *objectio.ObjectReader
@@ -238,6 +260,7 @@ func (c *moObjStatArg) PrepareCommand() *cobra.Command {
 	statCmd.Flags().IntP("level", "l", brief, "level")
 	statCmd.Flags().StringP("name", "n", "", "name")
 	statCmd.Flags().BoolP("local", "", false, "local")
+	statCmd.Flags().StringP("s3", "s", "", "s3")
 
 	return statCmd
 }
@@ -248,6 +271,7 @@ func (c *moObjStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.local, _ = cmd.Flags().GetBool("local")
 	path, _ := cmd.Flags().GetString("name")
 	c.dir, c.name = filepath.Split(path)
+	c.s3path, _ = cmd.Flags().GetString("s3")
 	if cmd.Flag("ictx") != nil {
 		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 
@@ -279,8 +303,10 @@ func (c *moObjStatArg) Usage() (res string) {
 	res += "    The sequence number of the block in the object\n"
 	res += "  -l, --level=0:\n"
 	res += "    The level of detail of the information, should be 0(brief), 1(standard), 2(detailed)\n"
+	res += "  -s, --s3=\"\":\n"
+	res += "    The path to s3 toml, if you want to get data from s3\n"
 	res += "  --local=false:\n"
-	res += "    Whether it is a local file, if true, use local fs to read file\n"
+	res += "    If the object file is download from a standalone node, you should add this flag\n"
 
 	return
 }
@@ -289,6 +315,12 @@ func (c *moObjStatArg) Run() (err error) {
 	ctx := context.Background()
 	if err = c.checkInputs(); err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid inputs: %v\n", err))
+	}
+
+	if c.s3path != "" {
+		if c.fs, err = s3fs(ctx, c.s3path); err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init s3fs: %v\n", err))
+		}
 	}
 
 	if c.ctx != nil {
@@ -562,6 +594,7 @@ type objGetArg struct {
 	ctx        *inspectContext
 	dir        string
 	name       string
+	s3path     string
 	id         int
 	cols, rows []int
 	col, row   string
@@ -637,6 +670,12 @@ func (c *objGetArg) Run() (err error) {
 	ctx := context.Background()
 	if err = c.checkInputs(); err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid inputs: %v\n", err))
+	}
+
+	if c.s3path != "" {
+		if c.fs, err = s3fs(ctx, c.s3path); err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init s3fs: %v\n", err))
+		}
 	}
 
 	if c.ctx != nil {
