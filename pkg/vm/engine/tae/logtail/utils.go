@@ -2821,7 +2821,7 @@ type CheckpointInfoJson struct {
 	Data                []ObjectInfoJson `json:"data"`
 }
 
-func (data *CheckpointData) PrintMetaBatch(id uint64) (res *ObjectInfoJson, err error) {
+func (data *CheckpointData) GetCheckpointMetaInfo(id uint64) (res *ObjectInfoJson, err error) {
 	tombstone := make(map[string]struct{})
 	tombstoneInfo := make(map[uint64]*tableinfo)
 	for i := 0; i < data.bats[BLKMetaInsertIDX].Length(); i++ {

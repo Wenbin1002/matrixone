@@ -1098,7 +1098,7 @@ func (c *ckpStatArg) Run() (err error) {
 			} else if c.tid == invalidId {
 				return moerr.NewInfoNoCtx("no table id")
 			}
-			if checkpointJson, err = data.PrintMetaBatch(c.tid); err != nil {
+			if checkpointJson, err = data.GetCheckpointMetaInfo(c.tid); err != nil {
 				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
 			}
 		}
