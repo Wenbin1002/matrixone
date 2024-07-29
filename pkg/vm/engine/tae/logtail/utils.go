@@ -2824,7 +2824,7 @@ type CheckpointInfoJson struct {
 func (data *CheckpointData) GetCheckpointMetaInfo(id uint64) (res *ObjectInfoJson, err error) {
 	tombstone := make(map[string]struct{})
 	tombstoneInfo := make(map[uint64]*tableinfo)
-	for i := 0; i < data.bats[BLKMetaInsertIDX].Length(); i++ {
+	for i := range data.bats[BLKMetaInsertIDX].Length() {
 		deltaLoc := objectio.Location(
 			data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
 		tid := data.bats[BLKMetaInsertTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
@@ -2841,7 +2841,7 @@ func (data *CheckpointData) GetCheckpointMetaInfo(id uint64) (res *ObjectInfoJso
 		tombstoneInfo[tid].add++
 
 	}
-	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
+	for i := range data.bats[BLKCNMetaInsertIDX].Length() {
 		deltaLoc := objectio.Location(
 			data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
 		if deltaLoc.IsEmpty() {
@@ -2858,7 +2858,7 @@ func (data *CheckpointData) GetCheckpointMetaInfo(id uint64) (res *ObjectInfoJso
 		data.bats[ObjectInfoIDX].GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
 	files := make(map[uint64]*tableinfo)
 	row := 0
-	for i := data.bats[ObjectInfoIDX].Length() - 1; i >= 0; i-- {
+	for i := range data.bats[ObjectInfoIDX].Length() {
 		if files[insTableIDs[i]] == nil {
 			files[insTableIDs[i]] = &tableinfo{
 				tid: insTableIDs[i],
@@ -2895,7 +2895,7 @@ func (data *CheckpointData) GetCheckpointMetaInfo(id uint64) (res *ObjectInfoJso
 	})
 	tableJsons := make([]TableInfoJson, 0, data.bats[ObjectInfoIDX].Length())
 	tables := make(map[uint64]int)
-	for i := 0; i < len(tableinfos) && i < 50; i++ {
+	for i := range len(tableinfos) {
 		tablejson := TableInfoJson{
 			ID:     tableinfos[i].tid,
 			Add:    tableinfos[i].add,
@@ -2918,7 +2918,7 @@ func (data *CheckpointData) GetCheckpointMetaInfo(id uint64) (res *ObjectInfoJso
 		return tableinfos2[i].add > tableinfos2[j].add
 	})
 
-	for i := 0; i < len(tableinfos2); i++ {
+	for i := range len(tableinfos2) {
 		if idx, ok := tables[tableinfos2[i].tid]; ok {
 			tablejson := &tableJsons[idx]
 			tablejson.TombstoneRows = tableinfos2[i].add
