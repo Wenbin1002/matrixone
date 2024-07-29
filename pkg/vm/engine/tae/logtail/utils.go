@@ -2823,29 +2823,29 @@ type CheckpointInfoJson struct {
 
 func (data *CheckpointData) PrintMetaBatch(id uint64) (res *ObjectInfoJson, err error) {
 	tombstone := make(map[string]struct{})
-	files2 := make(map[uint64]*tableinfo)
+	tombstoneInfo := make(map[uint64]*tableinfo)
 	for i := 0; i < data.bats[BLKMetaInsertIDX].Length(); i++ {
 		deltaLoc := objectio.Location(
 			data.bats[BLKMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
 		tid := data.bats[BLKMetaInsertTxnIDX].GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 
-		if files2[tid] == nil {
-			files2[tid] = &tableinfo{
+		if tombstoneInfo[tid] == nil {
+			tombstoneInfo[tid] = &tableinfo{
 				tid: tid,
 			}
 		}
 		if _, ok := tombstone[deltaLoc.Name().String()]; !ok {
 			tombstone[deltaLoc.Name().String()] = struct{}{}
-			files2[tid].delete++
+			tombstoneInfo[tid].delete++
 		}
-		files2[tid].add++
+		tombstoneInfo[tid].add++
 
 	}
 	for i := 0; i < data.bats[BLKCNMetaInsertIDX].Length(); i++ {
 		deltaLoc := objectio.Location(
 			data.bats[BLKCNMetaInsertIDX].GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte))
 		if deltaLoc.IsEmpty() {
-			panic(fmt.Sprintf("[checkpointStat] block %v deltaLoc is empty", deltaLoc.String()))
+			return nil, moerr.NewInfoNoCtx("failed to get checkpoint data, deltaLoc in empty")
 		}
 		if _, ok := tombstone[deltaLoc.Name().String()]; !ok {
 			tombstone[deltaLoc.Name().String()] = struct{}{}
@@ -2858,7 +2858,7 @@ func (data *CheckpointData) PrintMetaBatch(id uint64) (res *ObjectInfoJson, err 
 		data.bats[ObjectInfoIDX].GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
 	files := make(map[uint64]*tableinfo)
 	row := 0
-	for i := data.bats[ObjectInfoIDX].Length() - 1; i > 0; i-- {
+	for i := data.bats[ObjectInfoIDX].Length() - 1; i >= 0; i-- {
 		if files[insTableIDs[i]] == nil {
 			files[insTableIDs[i]] = &tableinfo{
 				tid: insTableIDs[i],
@@ -2870,11 +2870,11 @@ func (data *CheckpointData) PrintMetaBatch(id uint64) (res *ObjectInfoJson, err 
 		} else {
 			files[insTableIDs[i]].delete++
 		}
-		if files2[insTableIDs[i]] != nil && files2[insTableIDs[i]].add > 100 {
+		if tombstoneInfo[insTableIDs[i]] != nil {
 			var objectStats objectio.ObjectStats
 			buf := data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
 			objectStats.UnMarshal(buf)
-			files2[insTableIDs[i]].block += objectStats.BlkCnt()
+			tombstoneInfo[insTableIDs[i]].block += objectStats.BlkCnt()
 			row++
 		}
 	}
@@ -2909,7 +2909,7 @@ func (data *CheckpointData) PrintMetaBatch(id uint64) (res *ObjectInfoJson, err 
 	tableinfos2 := make([]*tableinfo, 0)
 	objectCount2 := uint64(0)
 	addCount2 := uint64(0)
-	for _, count := range files2 {
+	for _, count := range tombstoneInfo {
 		tableinfos2 = append(tableinfos2, count)
 		objectCount2 += count.add
 		addCount2 += count.add

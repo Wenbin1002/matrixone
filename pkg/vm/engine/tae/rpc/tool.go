@@ -463,7 +463,7 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 	addColumn := func(idx uint16) {
 		col := data.MustGetColumn(idx)
 		cols = append(cols, ColumnJson{
-			Index:       uint16(c.col),
+			Index:       idx,
 			DataSize:    formatBytes(col.Location().Length()),
 			OriDataSize: formatBytes(col.Location().OriginSize()),
 			Zonemap:     col.ZoneMap().String(),
@@ -532,7 +532,7 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 		addColumn := func(idx uint16) {
 			col := data.MustGetColumn(idx)
 			cols = append(cols, ColumnJson{
-				Index:       uint16(c.col),
+				Index:       idx,
 				DataSize:    formatBytes(col.Location().Length()),
 				OriDataSize: formatBytes(col.Location().OriginSize()),
 				Zonemap:     col.ZoneMap().String(),
