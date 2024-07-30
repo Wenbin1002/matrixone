@@ -2794,7 +2794,6 @@ type tableinfo struct {
 	tid    uint64
 	add    uint64
 	delete uint64
-	block  uint32
 }
 
 type TableInfoJson struct {
