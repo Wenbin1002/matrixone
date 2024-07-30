@@ -1232,7 +1232,8 @@ func (c *ckpListArg) getCkpList() (res string, err error) {
 }
 
 type TableIds struct {
-	Ids []uint64 `json:"tables"`
+	TableCnt int      `json:"table_count"`
+	Ids      []uint64 `json:"tables"`
 }
 
 func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
@@ -1249,7 +1250,8 @@ func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
 
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	tables := TableIds{
-		Ids: ids,
+		TableCnt: len(ids),
+		Ids:      ids,
 	}
 	jsonData, err := json.MarshalIndent(tables, "", "  ")
 	if err != nil {

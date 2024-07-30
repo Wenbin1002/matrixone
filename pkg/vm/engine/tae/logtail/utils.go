@@ -2803,7 +2803,6 @@ type TableInfoJson struct {
 	Delete         uint64 `json:"delete,omitempty"`
 	TombstoneRows  uint64 `json:"tombstone_rows,omitempty"`
 	TombstoneCount uint64 `json:"tombstone_count,omitempty"`
-	BlockCount     uint32 `json:"block_count,omitempty"`
 }
 
 type ObjectInfoJson struct {
@@ -2839,7 +2838,6 @@ func (data *CheckpointData) GetCheckpointMetaInfo(id uint64) (res *ObjectInfoJso
 			tombstoneInfo[tid].delete++
 		}
 		tombstoneInfo[tid].add++
-
 	}
 	for i := range data.bats[BLKCNMetaInsertIDX].Length() {
 		deltaLoc := objectio.Location(
@@ -2857,7 +2855,6 @@ func (data *CheckpointData) GetCheckpointMetaInfo(id uint64) (res *ObjectInfoJso
 	insDeleteTSs := vector.MustFixedCol[types.TS](
 		data.bats[ObjectInfoIDX].GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
 	files := make(map[uint64]*tableinfo)
-	row := 0
 	for i := range data.bats[ObjectInfoIDX].Length() {
 		if files[insTableIDs[i]] == nil {
 			files[insTableIDs[i]] = &tableinfo{
@@ -2869,13 +2866,6 @@ func (data *CheckpointData) GetCheckpointMetaInfo(id uint64) (res *ObjectInfoJso
 			files[insTableIDs[i]].add++
 		} else {
 			files[insTableIDs[i]].delete++
-		}
-		if tombstoneInfo[insTableIDs[i]] != nil {
-			var objectStats objectio.ObjectStats
-			buf := data.bats[ObjectInfoIDX].GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-			objectStats.UnMarshal(buf)
-			tombstoneInfo[insTableIDs[i]].block += objectStats.BlkCnt()
-			row++
 		}
 	}
 
@@ -2923,14 +2913,12 @@ func (data *CheckpointData) GetCheckpointMetaInfo(id uint64) (res *ObjectInfoJso
 			tablejson := &tableJsons[idx]
 			tablejson.TombstoneRows = tableinfos2[i].add
 			tablejson.TombstoneCount = tableinfos2[i].delete
-			tablejson.BlockCount = tableinfos2[i].block
 			continue
 		}
 		tablejson := TableInfoJson{
 			ID:             tableinfos2[i].tid,
 			TombstoneRows:  tableinfos2[i].add,
 			TombstoneCount: tableinfos2[i].delete,
-			BlockCount:     tableinfos2[i].block,
 		}
 		if id == 0 || tablejson.ID == id {
 			tableJsons = append(tableJsons, tablejson)
