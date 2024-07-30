@@ -35,7 +35,8 @@ import (
 )
 
 const (
-	invalidId = 0x3f3f3f3f
+	invalidId    = 0x3f3f3f3f
+	invalidLimit = 0x3f3f3f3f
 
 	brief    = 0
 	standard = 1
@@ -1019,11 +1020,12 @@ func (c *CheckpointArg) Run() error {
 }
 
 type ckpStatArg struct {
-	ctx *inspectContext
-	cid uint64
-	tid uint64
-	all bool
-	res string
+	ctx   *inspectContext
+	cid   uint64
+	tid   uint64
+	limit int
+	all   bool
+	res   string
 }
 
 func (c *ckpStatArg) PrepareCommand() *cobra.Command {
@@ -1038,6 +1040,7 @@ func (c *ckpStatArg) PrepareCommand() *cobra.Command {
 
 	ckpStatCmd.Flags().IntP("cid", "c", invalidId, "checkpoint lsn")
 	ckpStatCmd.Flags().IntP("tid", "t", invalidId, "checkpoint tid")
+	ckpStatCmd.Flags().IntP("limit", "l", invalidLimit, "checkpoint limit")
 	ckpStatCmd.Flags().BoolP("all", "a", false, "checkpoint all tables")
 
 	return ckpStatCmd
@@ -1049,9 +1052,9 @@ func (c *ckpStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	id, _ = cmd.Flags().GetInt("tid")
 	c.tid = uint64(id)
 	c.all, _ = cmd.Flags().GetBool("all")
+	c.limit, _ = cmd.Flags().GetInt("limit")
 	if cmd.Flag("ictx") != nil {
 		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-
 	}
 	return nil
 }
@@ -1073,6 +1076,8 @@ func (c *ckpStatArg) Usage() (res string) {
 	res += "    The lsn of checkpoint\n"
 	res += "  -t, --tid=invalidId:\n"
 	res += "    The id of table\n"
+	res += "  -l, --limit=invalidLimit:\n"
+	res += "    The limit length of the return value\n"
 	res += "  -a, --all=false:\n"
 	res += "    Show all tables\n"
 
@@ -1095,10 +1100,8 @@ func (c *ckpStatArg) Run() (err error) {
 			}
 			if c.all {
 				c.tid = 0
-			} else if c.tid == invalidId {
-				return moerr.NewInfoNoCtx("no table id")
 			}
-			if checkpointJson, err = data.GetCheckpointMetaInfo(c.tid); err != nil {
+			if checkpointJson, err = data.GetCheckpointMetaInfo(c.tid, c.limit); err != nil {
 				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
 			}
 		}
@@ -1136,6 +1139,7 @@ func getCkpData(ctx context.Context, entry *checkpoint.CheckpointEntry, fs *obje
 }
 
 type CkpEntry struct {
+	Index  int      `json:"index"`
 	LSN    string   `json:"lsn"`
 	Detail string   `json:"detail"`
 	Table  []uint64 `json:"table,omitempty"`
@@ -1147,9 +1151,10 @@ type CkpEntries struct {
 }
 
 type ckpListArg struct {
-	ctx *inspectContext
-	cid uint64
-	res string
+	ctx   *inspectContext
+	cid   uint64
+	limit int
+	res   string
 }
 
 func (c *ckpListArg) PrepareCommand() *cobra.Command {
@@ -1162,6 +1167,7 @@ func (c *ckpListArg) PrepareCommand() *cobra.Command {
 
 	ckpStatCmd.SetUsageTemplate(c.Usage())
 	ckpStatCmd.Flags().IntP("cid", "c", invalidId, "checkpoint id")
+	ckpStatCmd.Flags().IntP("limit", "l", invalidId, "limit")
 
 	return ckpStatCmd
 }
@@ -1172,6 +1178,7 @@ func (c *ckpListArg) FromCommand(cmd *cobra.Command) (err error) {
 	}
 	id, _ := cmd.Flags().GetInt("cid")
 	c.cid = uint64(id)
+	c.limit, _ = cmd.Flags().GetInt("limit")
 	return nil
 }
 
@@ -1190,6 +1197,8 @@ func (c *ckpListArg) Usage() (res string) {
 	res += "Options:\n"
 	res += "  -c, --cid=invalidId:\n"
 	res += "    The lsn of checkpoint\n"
+	res += "  -l, --limit=invalidLimit:\n"
+	res += "    The limit length of the return value\n"
 	return
 }
 
@@ -1210,8 +1219,12 @@ func (c *ckpListArg) Run() (err error) {
 func (c *ckpListArg) getCkpList() (res string, err error) {
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
 	ckpEntries := make([]CkpEntry, 0, len(entries))
-	for _, entry := range entries {
+	for i, entry := range entries {
+		if i >= c.limit {
+			break
+		}
 		ckpEntries = append(ckpEntries, CkpEntry{
+			Index:  i,
 			LSN:    entry.LSNString(),
 			Detail: entry.String(),
 		})
@@ -1247,7 +1260,9 @@ func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
 		data, _ := getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
 		ids = data.GetTableIds()
 	}
-
+	if c.limit < len(ids) {
+		ids = ids[:c.limit]
+	}
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	tables := TableIds{
 		TableCnt: len(ids),
