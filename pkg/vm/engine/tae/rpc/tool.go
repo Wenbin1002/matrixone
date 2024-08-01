@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/spf13/cobra"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -989,6 +990,9 @@ func (c *CheckpointArg) PrepareCommand() *cobra.Command {
 	list := ckpListArg{}
 	checkpointCmd.AddCommand(list.PrepareCommand())
 
+	down := ckpDownloadArg{}
+	checkpointCmd.AddCommand(down.PrepareCommand())
+
 	return checkpointCmd
 }
 
@@ -1020,12 +1024,13 @@ func (c *CheckpointArg) Run() error {
 }
 
 type ckpStatArg struct {
-	ctx   *inspectContext
-	cid   uint64
-	tid   uint64
-	limit int
-	all   bool
-	res   string
+	ctx    *inspectContext
+	cid    string
+	tid    uint64
+	limit  int
+	all    bool
+	latest bool
+	res    string
 }
 
 func (c *ckpStatArg) PrepareCommand() *cobra.Command {
@@ -1038,21 +1043,22 @@ func (c *ckpStatArg) PrepareCommand() *cobra.Command {
 
 	ckpStatCmd.SetUsageTemplate(c.Usage())
 
-	ckpStatCmd.Flags().IntP("cid", "c", invalidId, "checkpoint lsn")
+	ckpStatCmd.Flags().StringP("cid", "c", "", "checkpoint lsn")
 	ckpStatCmd.Flags().IntP("tid", "t", invalidId, "checkpoint tid")
 	ckpStatCmd.Flags().IntP("limit", "l", invalidLimit, "checkpoint limit")
 	ckpStatCmd.Flags().BoolP("all", "a", false, "checkpoint all tables")
+	ckpStatCmd.Flags().Bool("latest", false, "checkpoint latest tables")
 
 	return ckpStatCmd
 }
 
 func (c *ckpStatArg) FromCommand(cmd *cobra.Command) (err error) {
-	id, _ := cmd.Flags().GetInt("cid")
-	c.cid = uint64(id)
-	id, _ = cmd.Flags().GetInt("tid")
+	c.cid, _ = cmd.Flags().GetString("cid")
+	id, _ := cmd.Flags().GetInt("tid")
 	c.tid = uint64(id)
 	c.all, _ = cmd.Flags().GetBool("all")
 	c.limit, _ = cmd.Flags().GetInt("limit")
+	c.latest, _ = cmd.Flags().GetBool("latest")
 	if cmd.Flag("ictx") != nil {
 		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	}
@@ -1089,10 +1095,17 @@ func (c *ckpStatArg) Run() (err error) {
 		return moerr.NewInfoNoCtx("it is an online command")
 	}
 	ctx := context.Background()
-	var checkpointJson *logtail.ObjectInfoJson
-	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	checkpointJson := logtail.ObjectInfoJson{}
+	var entries []*checkpoint.CheckpointEntry
+	if c.latest {
+		entries = c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	} else {
+		entries = c.ctx.db.BGCheckpointRunner.GetAllGlobalCheckpoints()
+		entries = append(entries, c.ctx.db.BGCheckpointRunner.GetAllIncrementalCheckpoints()...)
+	}
+	tables := make(map[uint64]*logtail.TableInfoJson)
 	for _, entry := range entries {
-		if entry.LSN() == c.cid {
+		if c.latest || entry.GetEnd().ToString() == c.cid {
 			var data *logtail.CheckpointData
 			data, err = getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
 			if err != nil {
@@ -1101,10 +1114,38 @@ func (c *ckpStatArg) Run() (err error) {
 			if c.all {
 				c.tid = 0
 			}
-			if checkpointJson, err = data.GetCheckpointMetaInfo(c.tid, c.limit); err != nil {
+			var res *logtail.ObjectInfoJson
+			if res, err = data.GetCheckpointMetaInfo(c.tid); err != nil {
 				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
 			}
+
+			for _, val := range res.Tables {
+				table, ok := tables[val.ID]
+				if ok {
+					table.Add += val.Add
+					table.Delete += val.Delete
+					table.TombstoneRows += val.TombstoneRows
+					table.TombstoneCount += val.TombstoneCount
+				} else {
+					tables[val.ID] = &val
+				}
+			}
+			checkpointJson.ObjectCnt += res.ObjectCnt
+			checkpointJson.ObjectAddCnt += res.ObjectAddCnt
+			checkpointJson.ObjectDelCnt += res.ObjectDelCnt
+			checkpointJson.TombstoneCnt += res.TombstoneCnt
 		}
+	}
+	for _, val := range tables {
+		checkpointJson.Tables = append(checkpointJson.Tables, *val)
+	}
+
+	sort.Slice(checkpointJson.Tables, func(i, j int) bool {
+		return checkpointJson.Tables[i].Add > checkpointJson.Tables[j].Add
+	})
+
+	if c.limit < len(checkpointJson.Tables) {
+		checkpointJson.Tables = checkpointJson.Tables[:c.limit]
 	}
 
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
@@ -1117,7 +1158,11 @@ func (c *ckpStatArg) Run() (err error) {
 	return
 }
 
-func getCkpData(ctx context.Context, entry *checkpoint.CheckpointEntry, fs *objectio.ObjectFS) (data *logtail.CheckpointData, err error) {
+func getCkpData(
+	ctx context.Context,
+	entry *checkpoint.CheckpointEntry,
+	fs *objectio.ObjectFS,
+) (data *logtail.CheckpointData, err error) {
 	if data, err = entry.PrefetchMetaIdx(ctx, fs); err != nil {
 		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
 		return
@@ -1139,10 +1184,12 @@ func getCkpData(ctx context.Context, entry *checkpoint.CheckpointEntry, fs *obje
 }
 
 type CkpEntry struct {
-	Index  int      `json:"index"`
-	LSN    string   `json:"lsn"`
-	Detail string   `json:"detail"`
-	Table  []uint64 `json:"table,omitempty"`
+	Index int    `json:"index"`
+	LSN   string `json:"lsn"`
+	Type  string `json:"type"`
+	State int    `json:"state"`
+	Start string `json:"start"`
+	End   string `json:"end"`
 }
 
 type CkpEntries struct {
@@ -1152,8 +1199,9 @@ type CkpEntries struct {
 
 type ckpListArg struct {
 	ctx   *inspectContext
-	cid   uint64
+	cid   string
 	limit int
+	all   bool
 	res   string
 }
 
@@ -1166,8 +1214,9 @@ func (c *ckpListArg) PrepareCommand() *cobra.Command {
 	}
 
 	ckpStatCmd.SetUsageTemplate(c.Usage())
-	ckpStatCmd.Flags().IntP("cid", "c", invalidId, "checkpoint id")
-	ckpStatCmd.Flags().IntP("limit", "l", invalidId, "limit")
+	ckpStatCmd.Flags().StringP("cid", "c", "", "checkpoint id")
+	ckpStatCmd.Flags().IntP("limit", "l", invalidLimit, "limit")
+	ckpStatCmd.Flags().BoolP("all", "a", false, "all")
 
 	return ckpStatCmd
 }
@@ -1176,9 +1225,9 @@ func (c *ckpListArg) FromCommand(cmd *cobra.Command) (err error) {
 	if cmd.Flag("ictx") != nil {
 		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	}
-	id, _ := cmd.Flags().GetInt("cid")
-	c.cid = uint64(id)
+	c.cid, _ = cmd.Flags().GetString("cid")
 	c.limit, _ = cmd.Flags().GetInt("limit")
+	c.all, _ = cmd.Flags().GetBool("all")
 	return nil
 }
 
@@ -1199,6 +1248,8 @@ func (c *ckpListArg) Usage() (res string) {
 	res += "    The lsn of checkpoint\n"
 	res += "  -l, --limit=invalidLimit:\n"
 	res += "    The limit length of the return value\n"
+	res += "  --all=false:\n"
+	res += "    Display all checkpoints \n"
 	return
 }
 
@@ -1207,7 +1258,7 @@ func (c *ckpListArg) Run() (err error) {
 		return moerr.NewInfoNoCtx("it is an online command")
 	}
 	ctx := context.Background()
-	if c.cid == invalidId {
+	if c.cid == "" {
 		c.res, err = c.getCkpList()
 	} else {
 		c.res, err = c.getTableList(ctx)
@@ -1217,16 +1268,31 @@ func (c *ckpListArg) Run() (err error) {
 }
 
 func (c *ckpListArg) getCkpList() (res string, err error) {
-	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	var entries []*checkpoint.CheckpointEntry
+	if c.all {
+		entries = c.ctx.db.BGCheckpointRunner.GetAllGlobalCheckpoints()
+		entries = append(entries, c.ctx.db.BGCheckpointRunner.GetAllIncrementalCheckpoints()...)
+	} else {
+		entries = c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	}
 	ckpEntries := make([]CkpEntry, 0, len(entries))
 	for i, entry := range entries {
 		if i >= c.limit {
 			break
 		}
+		var global string
+		if entry.IsIncremental() {
+			global = "I"
+		} else {
+			global = "G"
+		}
 		ckpEntries = append(ckpEntries, CkpEntry{
-			Index:  i,
-			LSN:    entry.LSNString(),
-			Detail: entry.String(),
+			Index: i,
+			LSN:   entry.LSNString(),
+			Type:  global,
+			State: int(entry.GetState()),
+			Start: entry.GetStart().ToString(),
+			End:   entry.GetEnd().ToString(),
 		})
 	}
 
@@ -1250,22 +1316,24 @@ type TableIds struct {
 }
 
 func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
-	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	entries := c.ctx.db.BGCheckpointRunner.GetAllGlobalCheckpoints()
+	entries = append(entries, c.ctx.db.BGCheckpointRunner.GetAllIncrementalCheckpoints()...)
 	var ids []uint64
 	for _, entry := range entries {
-		if entry.LSN() != c.cid {
+		if entry.GetEnd().ToString() != c.cid {
 			continue
 		}
 
 		data, _ := getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
 		ids = data.GetTableIds()
 	}
-	if c.limit < len(ids) {
+	cnt := len(ids)
+	if c.limit < cnt {
 		ids = ids[:c.limit]
 	}
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	tables := TableIds{
-		TableCnt: len(ids),
+		TableCnt: cnt,
 		Ids:      ids,
 	}
 	jsonData, err := json.MarshalIndent(tables, "", "  ")
@@ -1273,6 +1341,77 @@ func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
 		return
 	}
 	res = string(jsonData)
+
+	return
+}
+
+type ckpDownloadArg struct {
+	ctx *inspectContext
+	res string
+}
+
+func (c *ckpDownloadArg) PrepareCommand() *cobra.Command {
+	ckpStatCmd := &cobra.Command{
+		Use:   "down",
+		Short: "checkpoint down",
+		Long:  "Display all checkpoints",
+		Run:   RunFactory(c),
+	}
+
+	ckpStatCmd.SetUsageTemplate(c.Usage())
+
+	return ckpStatCmd
+}
+
+func (c *ckpDownloadArg) FromCommand(cmd *cobra.Command) (err error) {
+	if cmd.Flag("ictx") != nil {
+		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	}
+	return nil
+}
+
+func (c *ckpDownloadArg) String() string {
+	return c.res
+}
+
+func (c *ckpDownloadArg) Usage() (res string) {
+	return
+}
+
+type LocationJson struct {
+	Index    int    `json:"index"`
+	Location string `json:"location"`
+}
+
+type Locations struct {
+	Count     int            `json:"count"`
+	Locations []LocationJson `json:"locations"`
+}
+
+func (c *ckpDownloadArg) Run() (err error) {
+	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	locations := Locations{}
+	for _, entry := range entries {
+		data, err := getCkpData(context.Background(), entry, c.ctx.db.Runtime.Fs)
+		if err != nil {
+			return err
+		}
+		locs := data.GetLocations()
+		for i, loc := range locs {
+			locations.Locations = append(locations.Locations, LocationJson{
+				Index:    i,
+				Location: loc.Name().String(),
+			})
+		}
+	}
+	locations.Count = len(locations.Locations)
+
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+	jsonData, err := json.MarshalIndent(locations, "", "  ")
+	if err != nil {
+		return
+	}
+	c.res = string(jsonData)
 
 	return
 }
