@@ -2823,7 +2823,7 @@ const (
 	invalid = 0xffffff
 )
 
-func (data *CheckpointData) GetCheckpointMetaInfo(id uint64, limit int) (res *ObjectInfoJson, err error) {
+func (data *CheckpointData) GetCheckpointMetaInfo(id uint64) (res *ObjectInfoJson, err error) {
 	tombstone := make(map[string]struct{})
 	tombstoneInfo := make(map[uint64]*tableinfo)
 	for i := range data.bats[BLKMetaInsertIDX].Length() {
@@ -2934,13 +2934,7 @@ func (data *CheckpointData) GetCheckpointMetaInfo(id uint64, limit int) (res *Ob
 		ObjectAddCnt: addCount,
 		ObjectDelCnt: deleteCount,
 		TombstoneCnt: len(tombstone),
-	}
-
-	if id != invalid {
-		if limit < len(tableJsons) {
-			tableJsons = tableJsons[:limit]
-		}
-		res.Tables = tableJsons
+		Tables:       tableJsons,
 	}
 
 	return
@@ -2959,6 +2953,14 @@ func (data *CheckpointData) GetTableIds() []uint64 {
 	}
 
 	return result
+}
+
+func (data *CheckpointData) GetLocations() (res []objectio.Location) {
+	for _, val := range data.locations {
+		res = append(res, val)
+	}
+
+	return
 }
 
 func (collector *BaseCollector) LoadAndCollectObject(c *catalog.Catalog, visitObject func(*catalog.ObjectEntry) error) error {
