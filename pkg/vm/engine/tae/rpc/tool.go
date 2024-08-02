@@ -1348,7 +1348,7 @@ func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
 
 type ckpDownloadArg struct {
 	ctx *inspectContext
-	res string
+	cnt int
 }
 
 func (c *ckpDownloadArg) PrepareCommand() *cobra.Command {
@@ -1372,49 +1372,61 @@ func (c *ckpDownloadArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *ckpDownloadArg) String() string {
-	return c.res
+	return fmt.Sprintf("Download success, file count %d", c.cnt)
 }
 
 func (c *ckpDownloadArg) Usage() (res string) {
 	return
 }
 
-type LocationJson struct {
-	Index    int    `json:"index"`
-	Location string `json:"location"`
-}
-
-type Locations struct {
-	Count     int            `json:"count"`
-	Locations []LocationJson `json:"locations"`
-}
+const (
+	checkpointDir = "ckp/"
+)
 
 func (c *ckpDownloadArg) Run() (err error) {
 	ctx := context.Background()
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
-	locations := Locations{}
-	for _, entry := range entries {
+	return c.DownLoadEntries(ctx, entries)
+}
+
+func (c *ckpDownloadArg) DownLoadEntries(ctx context.Context, entries []*checkpoint.CheckpointEntry) (err error) {
+	for i, entry := range entries {
 		data, err := getCkpData(context.Background(), entry, c.ctx.db.Runtime.Fs)
 		if err != nil {
 			return err
 		}
 		locs := data.GetLocations()
 		for _, loc := range locs {
-			backup.DownloadFile(ctx, c.ctx.db.Runtime.Fs.Service, c.ctx.db.Runtime.LocalFs.Service, loc.Name().String(), "", "ckp")
-			locations.Locations = append(locations.Locations, LocationJson{
-				Index:    len(locations.Locations),
-				Location: loc.Name().String(),
-			})
+			c.cnt++
+			err = backup.DownloadFile(
+				ctx,
+				c.ctx.db.Runtime.Fs.Service,
+				c.ctx.db.Runtime.LocalFs.Service,
+				loc.Name().String(),
+				"",
+				checkpointDir,
+			)
+			if err != nil {
+				return err
+			}
+		}
+
+		if i == len(entries)-1 {
+			c.cnt++
+			metaName := "meta_" + entry.GetStart().ToString() + "_" + entry.GetEnd().ToString() + ".ckp"
+			err = backup.DownloadFile(
+				ctx,
+				c.ctx.db.Runtime.Fs.Service,
+				c.ctx.db.Runtime.LocalFs.Service,
+				metaName,
+				checkpointDir,
+				checkpointDir,
+			)
+			if err != nil {
+				return err
+			}
 		}
 	}
-	locations.Count = len(locations.Locations)
 
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
-	jsonData, err := json.MarshalIndent(locations, "", "  ")
-	if err != nil {
-		return
-	}
-	c.res = string(jsonData)
-
-	return
+	return nil
 }
