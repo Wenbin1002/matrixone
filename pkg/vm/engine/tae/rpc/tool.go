@@ -1283,9 +1283,9 @@ func (c *ckpListArg) getCkpList() (res string, err error) {
 		}
 		var global string
 		if entry.IsIncremental() {
-			global = "I"
+			global = "Incremental"
 		} else {
-			global = "G"
+			global = "Global"
 		}
 		ckpEntries = append(ckpEntries, CkpEntry{
 			Index: i,
@@ -1353,9 +1353,9 @@ type ckpDownloadArg struct {
 
 func (c *ckpDownloadArg) PrepareCommand() *cobra.Command {
 	ckpStatCmd := &cobra.Command{
-		Use:   "down",
-		Short: "checkpoint down",
-		Long:  "Display all checkpoints",
+		Use:   "download",
+		Short: "checkpoint download",
+		Long:  "download checkpoints",
 		Run:   RunFactory(c),
 	}
 
@@ -1389,7 +1389,7 @@ func (c *ckpDownloadArg) Run() (err error) {
 	return c.DownLoadEntries(ctx, entries)
 }
 
-func (c *ckpDownloadArg) DownLoadEntries(ctx context.Context, entries []*checkpoint.CheckpointEntry) (err error) {
+func (c *ckpDownloadArg) DownLoadEntries(ctx context.Context, entries []*checkpoint.CheckpointEntry) error {
 	for i, entry := range entries {
 		data, err := getCkpData(context.Background(), entry, c.ctx.db.Runtime.Fs)
 		if err != nil {
@@ -1428,5 +1428,48 @@ func (c *ckpDownloadArg) DownLoadEntries(ctx context.Context, entries []*checkpo
 		}
 	}
 
+	return nil
+}
+
+type ckpReadArg struct {
+	ctx  *inspectContext
+	name string
+	path string
+	res  string
+}
+
+func (c *ckpReadArg) PrepareCommand() *cobra.Command {
+	ckpReadCmd := &cobra.Command{
+		Use:   "read",
+		Short: "checkpoint down",
+		Long:  "Display all checkpoints",
+		Run:   RunFactory(c),
+	}
+
+	ckpReadCmd.SetUsageTemplate(c.Usage())
+
+	ckpReadCmd.Flags().StringP("name", "n", "", "checkpoint name")
+
+	return ckpReadCmd
+}
+
+func (c *ckpReadArg) FromCommand(cmd *cobra.Command) (err error) {
+	dir, _ := cmd.Flags().GetString("name")
+	c.path, c.name = filepath.Split(dir)
+	if cmd.Flag("ictx") != nil {
+		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	}
+	return nil
+}
+
+func (c *ckpReadArg) String() string {
+	return c.res
+}
+
+func (c *ckpReadArg) Usage() (res string) {
+	return
+}
+
+func (c *ckpReadArg) Run() (err error) {
 	return nil
 }
