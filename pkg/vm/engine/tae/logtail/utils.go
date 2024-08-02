@@ -2867,12 +2867,8 @@ type ObjectInfoJson struct {
 
 type CheckpointInfoJson struct {
 	CheckpointDataCount int              `json:"checkpoint_data_count"`
-	Data                []ObjectInfoJson `json:"data"`
+	CheckpointData      []ObjectInfoJson `json:"data"`
 }
-
-const (
-	invalid = 0xffffff
-)
 
 func (data *CheckpointData) GetCheckpointMetaInfo(id uint64) (res *ObjectInfoJson, err error) {
 	tombstone := make(map[string]struct{})

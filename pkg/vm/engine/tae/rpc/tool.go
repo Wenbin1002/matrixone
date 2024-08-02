@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	jsoniter "github.com/json-iterator/go"
+	"github.com/matrixorigin/matrixone/pkg/backup"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1119,7 +1120,7 @@ func (c *ckpStatArg) Run() (err error) {
 				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
 			}
 
-			for _, val := range res.Tables {
+			for i, val := range res.Tables {
 				table, ok := tables[val.ID]
 				if ok {
 					table.Add += val.Add
@@ -1127,7 +1128,7 @@ func (c *ckpStatArg) Run() (err error) {
 					table.TombstoneRows += val.TombstoneRows
 					table.TombstoneCount += val.TombstoneCount
 				} else {
-					tables[val.ID] = &val
+					tables[val.ID] = &res.Tables[i]
 				}
 			}
 			checkpointJson.ObjectCnt += res.ObjectCnt
@@ -1389,6 +1390,7 @@ type Locations struct {
 }
 
 func (c *ckpDownloadArg) Run() (err error) {
+	ctx := context.Background()
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
 	locations := Locations{}
 	for _, entry := range entries {
@@ -1397,9 +1399,10 @@ func (c *ckpDownloadArg) Run() (err error) {
 			return err
 		}
 		locs := data.GetLocations()
-		for i, loc := range locs {
+		for _, loc := range locs {
+			backup.DownloadFile(ctx, c.ctx.db.Runtime.Fs.Service, c.ctx.db.Runtime.LocalFs.Service, loc.Name().String(), "", "ckp")
 			locations.Locations = append(locations.Locations, LocationJson{
-				Index:    i,
+				Index:    len(locations.Locations),
 				Location: loc.Name().String(),
 			})
 		}
