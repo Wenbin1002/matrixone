@@ -312,7 +312,12 @@ func (c *moObjStatArg) Run() (err error) {
 		c.fs = c.ctx.db.Runtime.Fs.Service
 	}
 
-	if err = c.InitReader(ctx, c.name); err != nil {
+	fs, err := initFs(ctx, c.dir, c.local)
+	if err != nil {
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fs: %v", err))
+	}
+
+	if c.reader, err = InitReader(fs, c.name); err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader %v", err))
 	}
 
@@ -321,38 +326,28 @@ func (c *moObjStatArg) Run() (err error) {
 	return
 }
 
-func (c *moObjStatArg) initFs(ctx context.Context, local bool) (err error) {
+func initFs(ctx context.Context, dir string, local bool) (fs fileservice.FileService, err error) {
 	if local {
 		cfg := fileservice.Config{
 			Name:    defines.LocalFileServiceName,
 			Backend: "DISK",
-			DataDir: c.dir,
+			DataDir: dir,
 			Cache:   fileservice.DisabledCacheConfig,
 		}
-		c.fs, err = fileservice.NewFileService(ctx, cfg, nil)
+		fs, err = fileservice.NewFileService(ctx, cfg, nil)
 		return
 	}
 
 	arg := fileservice.ObjectStorageArguments{
 		Name:     defines.SharedFileServiceName,
 		Endpoint: "DISK",
-		Bucket:   c.dir,
+		Bucket:   dir,
 	}
-	c.fs, err = fileservice.NewS3FS(ctx, arg, fileservice.DisabledCacheConfig, nil, false, true)
-	return
+	return fileservice.NewS3FS(ctx, arg, fileservice.DisabledCacheConfig, nil, false, true)
 }
 
-func (c *moObjStatArg) InitReader(ctx context.Context, name string) (err error) {
-	if c.fs == nil {
-		err = c.initFs(ctx, c.local)
-		if err != nil {
-			return err
-		}
-	}
-
-	c.reader, err = objectio.NewObjectReaderWithStr(name, c.fs)
-
-	return err
+func InitReader(fs fileservice.FileService, name string) (reader *objectio.ObjectReader, err error) {
+	return objectio.NewObjectReaderWithStr(name, fs)
 }
 
 func (c *moObjStatArg) checkInputs() error {
@@ -682,47 +677,18 @@ func (c *objGetArg) Run() (err error) {
 		c.fs = c.ctx.db.Runtime.Fs.Service
 	}
 
-	if err = c.InitReader(ctx, c.name); err != nil {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader: %v", err))
+	fs, err := initFs(ctx, c.dir, c.local)
+	if err != nil {
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fs: %v", err))
+	}
+
+	if c.reader, err = InitReader(fs, c.name); err != nil {
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader %v", err))
 	}
 
 	c.res, err = c.GetData(ctx)
 
 	return
-}
-
-func (c *objGetArg) initFs(ctx context.Context, local bool) (err error) {
-	if local {
-		cfg := fileservice.Config{
-			Name:    defines.LocalFileServiceName,
-			Backend: "DISK",
-			DataDir: c.dir,
-			Cache:   fileservice.DisabledCacheConfig,
-		}
-		c.fs, err = fileservice.NewFileService(ctx, cfg, nil)
-		return
-	}
-
-	arg := fileservice.ObjectStorageArguments{
-		Name:     defines.SharedFileServiceName,
-		Endpoint: "DISK",
-		Bucket:   c.dir,
-	}
-	c.fs, err = fileservice.NewS3FS(ctx, arg, fileservice.DisabledCacheConfig, nil, false, true)
-	return
-}
-
-func (c *objGetArg) InitReader(ctx context.Context, name string) (err error) {
-	if c.fs == nil {
-		err = c.initFs(ctx, c.local)
-		if err != nil {
-			return err
-		}
-	}
-
-	c.reader, err = objectio.NewObjectReaderWithStr(name, c.fs)
-
-	return err
 }
 
 func (c *objGetArg) checkInputs() error {
@@ -994,6 +960,9 @@ func (c *CheckpointArg) PrepareCommand() *cobra.Command {
 	down := ckpDownloadArg{}
 	checkpointCmd.AddCommand(down.PrepareCommand())
 
+	read := ckpReadArg{}
+	checkpointCmd.AddCommand(read.PrepareCommand())
+
 	return checkpointCmd
 }
 
@@ -1002,7 +971,7 @@ func (c *CheckpointArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *CheckpointArg) String() string {
-	return "table"
+	return "checkpoint"
 }
 
 func (c *CheckpointArg) Usage() (res string) {
@@ -1432,7 +1401,6 @@ func (c *ckpDownloadArg) DownLoadEntries(ctx context.Context, entries []*checkpo
 }
 
 type ckpReadArg struct {
-	ctx  *inspectContext
 	name string
 	path string
 	res  string
@@ -1441,7 +1409,7 @@ type ckpReadArg struct {
 func (c *ckpReadArg) PrepareCommand() *cobra.Command {
 	ckpReadCmd := &cobra.Command{
 		Use:   "read",
-		Short: "checkpoint down",
+		Short: "checkpoint read",
 		Long:  "Display all checkpoints",
 		Run:   RunFactory(c),
 	}
@@ -1456,9 +1424,6 @@ func (c *ckpReadArg) PrepareCommand() *cobra.Command {
 func (c *ckpReadArg) FromCommand(cmd *cobra.Command) (err error) {
 	dir, _ := cmd.Flags().GetString("name")
 	c.path, c.name = filepath.Split(dir)
-	if cmd.Flag("ictx") != nil {
-		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-	}
 	return nil
 }
 
@@ -1471,5 +1436,44 @@ func (c *ckpReadArg) Usage() (res string) {
 }
 
 func (c *ckpReadArg) Run() (err error) {
+	ctx := context.Background()
+	fs, err := initFs(ctx, c.path, true)
+	if err != nil {
+		return err
+	}
+	entries, err := checkpoint.ReplayCheckpointEntry(ctx, fs, filepath.Join(c.path, c.name))
+	if err != nil {
+		return err
+	}
+
+	ckpEntries := make([]CkpEntry, 0, len(entries))
+	for i, entry := range entries {
+		var global string
+		if entry.IsIncremental() {
+			global = "Incremental"
+		} else {
+			global = "Global"
+		}
+		ckpEntries = append(ckpEntries, CkpEntry{
+			Index: i,
+			LSN:   entry.LSNString(),
+			Type:  global,
+			State: int(entry.GetState()),
+			Start: entry.GetStart().ToString(),
+			End:   entry.GetEnd().ToString(),
+		})
+	}
+
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+	ckpEntriesJson := CkpEntries{
+		Count:       len(ckpEntries),
+		Checkpoints: ckpEntries,
+	}
+	jsonData, err := json.MarshalIndent(ckpEntriesJson, "", "  ")
+	if err != nil {
+		return
+	}
+	c.res = string(jsonData)
+
 	return nil
 }
