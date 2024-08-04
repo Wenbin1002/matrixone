@@ -1441,7 +1441,8 @@ func (c *ckpReadArg) Run() (err error) {
 	if err != nil {
 		return err
 	}
-	entries, err := checkpoint.ReplayCheckpointEntry(ctx, fs, filepath.Join(c.path, c.name))
+	reader, err := InitReader(fs, c.name)
+	entries, err := checkpoint.ReplayCheckpointEntry(ctx, reader)
 	if err != nil {
 		return err
 	}
