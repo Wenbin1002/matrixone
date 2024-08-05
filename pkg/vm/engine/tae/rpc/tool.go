@@ -960,8 +960,8 @@ func (c *CheckpointArg) PrepareCommand() *cobra.Command {
 	down := ckpDownloadArg{}
 	checkpointCmd.AddCommand(down.PrepareCommand())
 
-	read := ckpReadArg{}
-	checkpointCmd.AddCommand(read.PrepareCommand())
+	//read := ckpReadArg{}
+	//checkpointCmd.AddCommand(read.PrepareCommand())
 
 	return checkpointCmd
 }
@@ -994,13 +994,13 @@ func (c *CheckpointArg) Run() error {
 }
 
 type ckpStatArg struct {
-	ctx    *inspectContext
-	cid    string
-	tid    uint64
-	limit  int
-	all    bool
-	latest bool
-	res    string
+	ctx   *inspectContext
+	cid   string
+	tid   uint64
+	limit int
+
+	all, latest     bool
+	path, name, res string
 }
 
 func (c *ckpStatArg) PrepareCommand() *cobra.Command {
@@ -1018,6 +1018,7 @@ func (c *ckpStatArg) PrepareCommand() *cobra.Command {
 	ckpStatCmd.Flags().IntP("limit", "l", invalidLimit, "checkpoint limit")
 	ckpStatCmd.Flags().BoolP("all", "a", false, "checkpoint all tables")
 	ckpStatCmd.Flags().Bool("latest", false, "checkpoint latest tables")
+	ckpStatCmd.Flags().StringP("name", "n", "", "checkpoint name")
 
 	return ckpStatCmd
 }
@@ -1029,6 +1030,8 @@ func (c *ckpStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.all, _ = cmd.Flags().GetBool("all")
 	c.limit, _ = cmd.Flags().GetInt("limit")
 	c.latest, _ = cmd.Flags().GetBool("latest")
+	dir, _ := cmd.Flags().GetString("name")
+	c.path, c.name = filepath.Split(dir)
 	if cmd.Flag("ictx") != nil {
 		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	}
@@ -1061,23 +1064,37 @@ func (c *ckpStatArg) Usage() (res string) {
 }
 
 func (c *ckpStatArg) Run() (err error) {
-	if c.ctx == nil {
-		return moerr.NewInfoNoCtx("it is an online command")
-	}
 	ctx := context.Background()
 	checkpointJson := logtail.ObjectInfoJson{}
 	var entries []*checkpoint.CheckpointEntry
-	if c.latest {
-		entries = c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	if c.ctx == nil {
+		entries, err = readCkpFromDisk(ctx, c.path, c.name)
 	} else {
-		entries = c.ctx.db.BGCheckpointRunner.GetAllGlobalCheckpoints()
-		entries = append(entries, c.ctx.db.BGCheckpointRunner.GetAllIncrementalCheckpoints()...)
+		if c.latest {
+			entries = c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+		} else {
+			entries = c.ctx.db.BGCheckpointRunner.GetAllGlobalCheckpoints()
+			entries = append(entries, c.ctx.db.BGCheckpointRunner.GetAllIncrementalCheckpoints()...)
+		}
 	}
 	tables := make(map[uint64]*logtail.TableInfoJson)
 	for _, entry := range entries {
 		if c.latest || entry.GetEnd().ToString() == c.cid {
 			var data *logtail.CheckpointData
-			data, err = getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
+			var Fs *objectio.ObjectFS
+			if c.ctx == nil {
+				fs, err := initFs(ctx, entry.GetEnd().ToString(), true)
+				if err != nil {
+					return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fs %v, %v", c.cid, err))
+				}
+				Fs = &objectio.ObjectFS{
+					Service: fs,
+					Dir:     c.path,
+				}
+			} else {
+				Fs = c.ctx.db.Runtime.Fs
+			}
+			data, err = getCkpData(ctx, entry, Fs)
 			if err != nil {
 				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
 			}
@@ -1171,24 +1188,27 @@ type ckpListArg struct {
 	ctx   *inspectContext
 	cid   string
 	limit int
-	all   bool
-	res   string
+
+	all, download   bool
+	res, path, name string
 }
 
 func (c *ckpListArg) PrepareCommand() *cobra.Command {
-	ckpStatCmd := &cobra.Command{
+	ckpListCmd := &cobra.Command{
 		Use:   "list",
 		Short: "checkpoint list",
 		Long:  "Display all checkpoints",
 		Run:   RunFactory(c),
 	}
 
-	ckpStatCmd.SetUsageTemplate(c.Usage())
-	ckpStatCmd.Flags().StringP("cid", "c", "", "checkpoint id")
-	ckpStatCmd.Flags().IntP("limit", "l", invalidLimit, "limit")
-	ckpStatCmd.Flags().BoolP("all", "a", false, "all")
+	ckpListCmd.SetUsageTemplate(c.Usage())
+	ckpListCmd.Flags().StringP("cid", "c", "", "checkpoint id")
+	ckpListCmd.Flags().IntP("limit", "l", invalidLimit, "limit")
+	ckpListCmd.Flags().BoolP("all", "a", false, "all")
+	ckpListCmd.Flags().StringP("name", "n", "", "name")
+	ckpListCmd.Flags().BoolP("download", "d", false, "download")
 
-	return ckpStatCmd
+	return ckpListCmd
 }
 
 func (c *ckpListArg) FromCommand(cmd *cobra.Command) (err error) {
@@ -1198,6 +1218,9 @@ func (c *ckpListArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.cid, _ = cmd.Flags().GetString("cid")
 	c.limit, _ = cmd.Flags().GetInt("limit")
 	c.all, _ = cmd.Flags().GetBool("all")
+	c.download, _ = cmd.Flags().GetBool("download")
+	dir, _ := cmd.Flags().GetString("name")
+	c.path, c.name = filepath.Split(dir)
 	return nil
 }
 
@@ -1224,10 +1247,15 @@ func (c *ckpListArg) Usage() (res string) {
 }
 
 func (c *ckpListArg) Run() (err error) {
-	if c.ctx == nil {
-		return moerr.NewInfoNoCtx("it is an online command")
-	}
 	ctx := context.Background()
+	if c.download {
+		cnt, err := c.DownLoadEntries(ctx)
+		if err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to download entries, err %v", err))
+		}
+		c.res = fmt.Sprintf("downloaded %d entries", cnt)
+	}
+
 	if c.cid == "" {
 		c.res, err = c.getCkpList()
 	} else {
@@ -1238,13 +1266,12 @@ func (c *ckpListArg) Run() (err error) {
 }
 
 func (c *ckpListArg) getCkpList() (res string, err error) {
-	var entries []*checkpoint.CheckpointEntry
-	if c.all {
-		entries = c.ctx.db.BGCheckpointRunner.GetAllGlobalCheckpoints()
-		entries = append(entries, c.ctx.db.BGCheckpointRunner.GetAllIncrementalCheckpoints()...)
-	} else {
-		entries = c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	ctx := context.Background()
+	entries, err := c.getCkpEntries(ctx)
+	if err != nil {
+		return "", err
 	}
+
 	ckpEntries := make([]CkpEntry, 0, len(entries))
 	for i, entry := range entries {
 		if i >= c.limit {
@@ -1280,14 +1307,44 @@ func (c *ckpListArg) getCkpList() (res string, err error) {
 	return
 }
 
+func readCkpFromDisk(ctx context.Context, path, name string) ([]*checkpoint.CheckpointEntry, error) {
+	fs, err := initFs(ctx, path, true)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := InitReader(fs, name)
+	if err != nil {
+		return nil, err
+	}
+	return checkpoint.ReplayCheckpointEntry(ctx, reader)
+}
+
+func (c *ckpListArg) getCkpEntries(ctx context.Context) (entries []*checkpoint.CheckpointEntry, err error) {
+	if c.ctx == nil {
+		entries, err = readCkpFromDisk(ctx, c.path, c.name)
+	} else {
+		if c.all {
+			entries = c.ctx.db.BGCheckpointRunner.GetAllGlobalCheckpoints()
+			entries = append(entries, c.ctx.db.BGCheckpointRunner.GetAllIncrementalCheckpoints()...)
+		} else {
+			entries = c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+		}
+	}
+
+	return
+}
+
 type TableIds struct {
 	TableCnt int      `json:"table_count"`
 	Ids      []uint64 `json:"tables"`
 }
 
 func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
-	entries := c.ctx.db.BGCheckpointRunner.GetAllGlobalCheckpoints()
-	entries = append(entries, c.ctx.db.BGCheckpointRunner.GetAllIncrementalCheckpoints()...)
+	c.all = true
+	entries, err := c.getCkpEntries(ctx)
+	if err != nil {
+		return "", err
+	}
 	var ids []uint64
 	for _, entry := range entries {
 		if entry.GetEnd().ToString() != c.cid {
@@ -1315,166 +1372,51 @@ func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
 	return
 }
 
-type ckpDownloadArg struct {
-	ctx *inspectContext
-	cnt int
-}
-
-func (c *ckpDownloadArg) PrepareCommand() *cobra.Command {
-	ckpStatCmd := &cobra.Command{
-		Use:   "download",
-		Short: "checkpoint download",
-		Long:  "download checkpoints",
-		Run:   RunFactory(c),
-	}
-
-	ckpStatCmd.SetUsageTemplate(c.Usage())
-
-	return ckpStatCmd
-}
-
-func (c *ckpDownloadArg) FromCommand(cmd *cobra.Command) (err error) {
-	if cmd.Flag("ictx") != nil {
-		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-	}
-	return nil
-}
-
-func (c *ckpDownloadArg) String() string {
-	return fmt.Sprintf("Download success, file count %d", c.cnt)
-}
-
-func (c *ckpDownloadArg) Usage() (res string) {
-	return
-}
-
 const (
 	checkpointDir = "ckp/"
 )
 
-func (c *ckpDownloadArg) Run() (err error) {
-	ctx := context.Background()
+func (c *ckpListArg) DownLoadEntries(ctx context.Context) (cnt int, err error) {
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
-	return c.DownLoadEntries(ctx, entries)
-}
-
-func (c *ckpDownloadArg) DownLoadEntries(ctx context.Context, entries []*checkpoint.CheckpointEntry) error {
+	entry := entries[len(entries)-1]
+	metaDir := "meta_0-0_" + entry.GetEnd().ToString()
+	metaName := "meta_" + entry.GetStart().ToString() + "_" + entry.GetEnd().ToString() + ".ckp"
 	for i, entry := range entries {
 		data, err := getCkpData(context.Background(), entry, c.ctx.db.Runtime.Fs)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		locs := data.GetLocations()
 		for _, loc := range locs {
-			c.cnt++
+			cnt++
 			err = backup.DownloadFile(
 				ctx,
 				c.ctx.db.Runtime.Fs.Service,
 				c.ctx.db.Runtime.LocalFs.Service,
 				loc.Name().String(),
 				"",
-				checkpointDir,
+				checkpointDir+metaDir,
 			)
 			if err != nil {
-				return err
+				return 0, err
 			}
 		}
 
 		if i == len(entries)-1 {
-			c.cnt++
-			metaName := "meta_" + entry.GetStart().ToString() + "_" + entry.GetEnd().ToString() + ".ckp"
+			cnt++
 			err = backup.DownloadFile(
 				ctx,
 				c.ctx.db.Runtime.Fs.Service,
 				c.ctx.db.Runtime.LocalFs.Service,
 				metaName,
 				checkpointDir,
-				checkpointDir,
+				checkpointDir+metaDir,
 			)
 			if err != nil {
-				return err
+				return 0, err
 			}
 		}
 	}
 
-	return nil
-}
-
-type ckpReadArg struct {
-	name string
-	path string
-	res  string
-}
-
-func (c *ckpReadArg) PrepareCommand() *cobra.Command {
-	ckpReadCmd := &cobra.Command{
-		Use:   "read",
-		Short: "checkpoint read",
-		Long:  "Display all checkpoints",
-		Run:   RunFactory(c),
-	}
-
-	ckpReadCmd.SetUsageTemplate(c.Usage())
-
-	ckpReadCmd.Flags().StringP("name", "n", "", "checkpoint name")
-
-	return ckpReadCmd
-}
-
-func (c *ckpReadArg) FromCommand(cmd *cobra.Command) (err error) {
-	dir, _ := cmd.Flags().GetString("name")
-	c.path, c.name = filepath.Split(dir)
-	return nil
-}
-
-func (c *ckpReadArg) String() string {
-	return c.res
-}
-
-func (c *ckpReadArg) Usage() (res string) {
 	return
-}
-
-func (c *ckpReadArg) Run() (err error) {
-	ctx := context.Background()
-	fs, err := initFs(ctx, c.path, true)
-	if err != nil {
-		return err
-	}
-	reader, err := InitReader(fs, c.name)
-	entries, err := checkpoint.ReplayCheckpointEntry(ctx, reader)
-	if err != nil {
-		return err
-	}
-
-	ckpEntries := make([]CkpEntry, 0, len(entries))
-	for i, entry := range entries {
-		var global string
-		if entry.IsIncremental() {
-			global = "Incremental"
-		} else {
-			global = "Global"
-		}
-		ckpEntries = append(ckpEntries, CkpEntry{
-			Index: i,
-			LSN:   entry.LSNString(),
-			Type:  global,
-			State: int(entry.GetState()),
-			Start: entry.GetStart().ToString(),
-			End:   entry.GetEnd().ToString(),
-		})
-	}
-
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
-	ckpEntriesJson := CkpEntries{
-		Count:       len(ckpEntries),
-		Checkpoints: ckpEntries,
-	}
-	jsonData, err := json.MarshalIndent(ckpEntriesJson, "", "  ")
-	if err != nil {
-		return
-	}
-	c.res = string(jsonData)
-
-	return nil
 }
