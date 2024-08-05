@@ -974,20 +974,20 @@ func (c *CheckpointArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *CheckpointArg) String() string {
-	return "checkpoint"
+	return c.Usage()
 }
 
 func (c *CheckpointArg) Usage() (res string) {
 	res += "Available Commands:\n"
-	res += fmt.Sprintf("  %-5v show table information\n", "stat")
+	res += fmt.Sprintf("  %-5v display checkpoint meta information\n", "stat")
 	res += fmt.Sprintf("  %-5v display checkpoint or table information\n", "list")
 
 	res += "\n"
 	res += "Usage:\n"
-	res += "inspect table [flags] [options]\n"
+	res += "inspect checkpoint [flags] [options]\n"
 
 	res += "\n"
-	res += "Use \"mo-tool inspect table <command> --help\" for more information about a given command.\n"
+	res += "Use \"mo-tool inspect checkpoint <command> --help\" for more information about a given command.\n"
 
 	return
 }
@@ -1010,7 +1010,7 @@ func (c *ckpStatArg) PrepareCommand() *cobra.Command {
 	ckpStatCmd := &cobra.Command{
 		Use:   "stat",
 		Short: "checkpoint stat",
-		Long:  "Display information about a given checkpoint",
+		Long:  "Display checkpoint meta information",
 		Run:   RunFactory(c),
 	}
 
@@ -1045,19 +1045,23 @@ func (c *ckpStatArg) String() string {
 
 func (c *ckpStatArg) Usage() (res string) {
 	res += "Examples:\n"
-	res += "  # Display all table information for the given checkpoint\n"
-	res += "  inspect checkpoint stat -c ckp_lsn\n"
-	res += "  # Display information for the given table\n"
-	res += "  inspect checkpoint stat -c ckp_lsn -t tid\n"
+	res += "  # Display meta information for the latest checkpoints\n"
+	res += "  inspect checkpoint stat\n"
+	res += "  # Display information for the given checkpoint\n"
+	res += "  inspect checkpoint stat -c ckp_end_ts\n"
+	res += "  # [Offline] display latest checkpoints in the meta file\n"
+	res += "  inspect checkpoint stat -n /your/path/meta_file\n"
 
 	res += "\n"
 	res += "Options:\n"
 	res += "  -c, --cid=invalidId:\n"
-	res += "    The lsn of checkpoint\n"
+	res += "    The end ts of checkpoint\n"
 	res += "  -t, --tid=invalidId:\n"
 	res += "    The id of table\n"
 	res += "  -l, --limit=invalidLimit:\n"
-	res += "    The limit length of the return value\n"
+	res += "    The limit length of the tables\n"
+	res += "  -n, --name=\"\":\n"
+	res += "    If you want to use this command offline, specify the file to be analyzed by this flag\n"
 	res += "  -a, --all=false:\n"
 	res += "    Show all tables\n"
 
@@ -1072,8 +1076,6 @@ func (c *ckpStatArg) Run() (err error) {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get ckp entries %s", err))
 	}
 	tables := make(map[uint64]*logtail.TableInfoJson)
-	tableins := make(map[uint64]uint64)
-	tabledel := make(map[uint64]uint64)
 	locations := make([]objectio.Location, 0, len(entries))
 	versions := make([]uint32, 0, len(entries))
 	for _, entry := range entries {
@@ -1125,12 +1127,17 @@ func (c *ckpStatArg) Run() (err error) {
 		}
 	}
 
+	tableins := make(map[uint64]uint64)
+	tabledel := make(map[uint64]uint64)
 	ins, del, err := logtail.GetStorageUsageHistory(
 		ctx, c.ctx.db.Runtime.SID(),
 		locations, versions,
 		c.ctx.db.Runtime.Fs.Service,
 		common.CheckpointAllocator,
 	)
+	if err != nil {
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get storage usage %v", err))
+	}
 	for _, datas := range ins {
 		for _, data := range datas {
 			tableins[data.TblId] += data.Size
@@ -1204,20 +1211,16 @@ func getCkpData(
 	fs *objectio.ObjectFS,
 ) (data *logtail.CheckpointData, err error) {
 	if data, err = entry.PrefetchMetaIdx(ctx, fs); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
-		return
+		return nil, moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
 	}
 	if err = entry.ReadMetaIdx(ctx, fs, data); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
-		return
+		return nil, moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
 	}
 	if err = entry.Prefetch(ctx, fs, data); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
-		return
+		return nil, moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
 	}
 	if err = entry.Read(ctx, fs, data); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
-		return
+		return nil, moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
 	}
 
 	return
@@ -1283,19 +1286,27 @@ func (c *ckpListArg) String() string {
 
 func (c *ckpListArg) Usage() (res string) {
 	res += "Examples:\n"
-	res += "  # Display all checkpoints in memory\n"
+	res += "  # Display latest checkpoints in memory\n"
 	res += "  inspect checkpoint list\n"
 	res += "  # Display all tables for the given checkpoint\n"
-	res += "  inspect checkpoint list -c ckp_lsn\n"
+	res += "  inspect checkpoint list -c ckp_end_ts\n"
+	res += "  # Download latest checkpoints, the dir is mo-data/local/ckp\n"
+	res += "  inspect checkpoint list -d\n"
+	res += "  # [Offline] display all checkpoints in the meta file\n"
+	res += "  inspect checkpoint list -n /your/path/meta_file\n"
 
 	res += "\n"
 	res += "Options:\n"
 	res += "  -c, --cid=invalidId:\n"
-	res += "    The lsn of checkpoint\n"
+	res += "    Display all table IDs of the ckp specified by end ts\n"
 	res += "  -l, --limit=invalidLimit:\n"
-	res += "    The limit length of the return value\n"
-	res += "  --all=false:\n"
+	res += "    The limit length of the return checkpoints\n"
+	res += "  -n, --name=\"\":\n"
+	res += "    If you want to use this command offline, specify the file to be analyzed by this flag\n"
+	res += "  -a, --all=false:\n"
 	res += "    Display all checkpoints \n"
+	res += "  -d, --download=false:\n"
+	res += "    Download latest checkpoints, the dir is mo-data/local/ckp \n"
 	return
 }
 
@@ -1371,8 +1382,7 @@ type TableIds struct {
 }
 
 func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
-	c.all = true
-	entries, err := getCkpEntries(ctx, c.ctx, c.path, c.name, c.all)
+	entries, err := getCkpEntries(ctx, c.ctx, c.path, c.name, true)
 	if err != nil {
 		return "", err
 	}
