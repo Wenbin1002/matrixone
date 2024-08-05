@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/spf13/cobra"
@@ -100,15 +101,23 @@ func getInputs(input string, result *[]int) error {
 	return nil
 }
 
-func formatBytes(bytes uint32) string {
+type Integer interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64
+}
+
+func formatBytes[T Integer](size T) string {
+	bytes := uint64(size)
 	const (
 		_         = iota
-		KB uint32 = 1 << (10 * iota)
+		KB uint64 = 1 << (10 * iota)
 		MB
 		GB
+		TB
 	)
 
 	switch {
+	case bytes >= TB:
+		return fmt.Sprintf("%.2f TB", float64(bytes)/float64(TB))
 	case bytes >= GB:
 		return fmt.Sprintf("%.2f GB", float64(bytes)/float64(GB))
 	case bytes >= MB:
@@ -957,12 +966,6 @@ func (c *CheckpointArg) PrepareCommand() *cobra.Command {
 	list := ckpListArg{}
 	checkpointCmd.AddCommand(list.PrepareCommand())
 
-	down := ckpDownloadArg{}
-	checkpointCmd.AddCommand(down.PrepareCommand())
-
-	//read := ckpReadArg{}
-	//checkpointCmd.AddCommand(read.PrepareCommand())
-
 	return checkpointCmd
 }
 
@@ -1078,6 +1081,10 @@ func (c *ckpStatArg) Run() (err error) {
 		}
 	}
 	tables := make(map[uint64]*logtail.TableInfoJson)
+	tableins := make(map[uint64]uint64)
+	tabledel := make(map[uint64]uint64)
+	locations := make([]objectio.Location, 0, len(entries))
+	versions := make([]uint32, 0, len(entries))
 	for _, entry := range entries {
 		if c.latest || entry.GetEnd().ToString() == c.cid {
 			var data *logtail.CheckpointData
@@ -1121,17 +1128,45 @@ func (c *ckpStatArg) Run() (err error) {
 			checkpointJson.ObjectAddCnt += res.ObjectAddCnt
 			checkpointJson.ObjectDelCnt += res.ObjectDelCnt
 			checkpointJson.TombstoneCnt += res.TombstoneCnt
+
+			locations = append(locations, entry.GetLocation())
+			versions = append(versions, entry.GetVersion())
 		}
 	}
-	for _, val := range tables {
-		checkpointJson.Tables = append(checkpointJson.Tables, *val)
+
+	ins, del, err := logtail.GetStorageUsageHistory(
+		ctx, c.ctx.db.Runtime.SID(),
+		locations, versions,
+		c.ctx.db.Runtime.Fs.Service,
+		common.CheckpointAllocator,
+	)
+	for _, datas := range ins {
+		for _, data := range datas {
+			tableins[data.TblId] += data.Size
+		}
 	}
+	for _, datas := range del {
+		for _, data := range datas {
+			tabledel[data.TblId] += data.Size
+		}
+	}
+
+	for i := range tables {
+		if size, ok := tableins[tables[i].ID]; ok {
+			tables[i].InsertSize = formatBytes(size)
+		}
+		if size, ok := tabledel[tables[i].ID]; ok {
+			tables[i].DeleteSize = formatBytes(size)
+		}
+		checkpointJson.Tables = append(checkpointJson.Tables, *tables[i])
+	}
+	checkpointJson.TableCnt = len(checkpointJson.Tables)
 
 	sort.Slice(checkpointJson.Tables, func(i, j int) bool {
 		return checkpointJson.Tables[i].Add > checkpointJson.Tables[j].Add
 	})
 
-	if c.limit < len(checkpointJson.Tables) {
+	if c.limit < checkpointJson.TableCnt {
 		checkpointJson.Tables = checkpointJson.Tables[:c.limit]
 	}
 

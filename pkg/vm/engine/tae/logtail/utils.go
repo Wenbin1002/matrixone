@@ -2849,10 +2849,12 @@ type tableinfo struct {
 
 type TableInfoJson struct {
 	ID             uint64 `json:"id"`
-	Add            uint64 `json:"add,omitempty"`
-	Delete         uint64 `json:"delete,omitempty"`
-	TombstoneRows  uint64 `json:"tombstone_rows,omitempty"`
-	TombstoneCount uint64 `json:"tombstone_count,omitempty"`
+	Add            uint64 `json:"object_add_count"`
+	Delete         uint64 `json:"object_del_count"`
+	TombstoneRows  uint64 `json:"tombstone_rows"`
+	TombstoneCount uint64 `json:"tombstone_count"`
+	InsertSize     string `json:"insert_size,omitempty"`
+	DeleteSize     string `json:"delete_size,omitempty"`
 }
 
 type ObjectInfoJson struct {
