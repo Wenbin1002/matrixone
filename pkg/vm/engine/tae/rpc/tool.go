@@ -1195,7 +1195,7 @@ func (c *ckpStatArg) Run() (err error) {
 	return
 }
 
-func readCkpFromDisk(ctx context.Context, path, name string) ([]*checkpoint.CheckpointEntry, error) {
+func readCkpFromDisk(ctx context.Context, path, name string) (res []*checkpoint.CheckpointEntry, err error) {
 	fs, err := initFs(ctx, path, true)
 	if err != nil {
 		return nil, err
@@ -1204,7 +1204,25 @@ func readCkpFromDisk(ctx context.Context, path, name string) ([]*checkpoint.Chec
 	if err != nil {
 		return nil, err
 	}
-	return checkpoint.ReplayCheckpointEntry(ctx, reader)
+	res, err = checkpoint.ReplayCheckpointEntry(ctx, reader)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(res, func(i, j int) bool {
+		end1 := res[i].GetEnd()
+		end2 := res[j].GetEnd()
+		return end1.LessEq(&end2)
+	})
+	var idx int
+	for i := range res {
+		if !res[i].IsIncremental() {
+			idx = i
+			break
+		}
+	}
+	res = res[idx:]
+
+	return
 }
 
 func getCkpEntries(ctx context.Context, context *inspectContext, path, name string, all bool) (entries []*checkpoint.CheckpointEntry, err error) {
@@ -1453,7 +1471,6 @@ func (c *ckpListArg) DownLoadEntries(ctx context.Context) (cnt int, err error) {
 	}
 
 	for _, entry := range entries {
-		logutil.Infof("[checkpointStat] %v", entry.GetTNLocation().Name().String())
 		if err = down(entry.GetTNLocation().Name().String(), ""); err != nil {
 			return 0, err
 		}
