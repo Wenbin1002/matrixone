@@ -1423,7 +1423,9 @@ func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
 	}
 	var fs fileservice.FileService
 	if c.ctx == nil {
-		fs, err = initFs(ctx, c.path, true)
+		if fs, err = initFs(ctx, c.path, true); err != nil {
+			return "", moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fileservice, err %v\n", err))
+		}
 	} else {
 		fs = c.ctx.db.Runtime.Fs.Service
 	}
