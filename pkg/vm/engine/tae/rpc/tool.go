@@ -1114,11 +1114,8 @@ func (c *ckpStatArg) Run() (err error) {
 			if err != nil {
 				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v\n", c.cid, err))
 			}
-			if c.all {
-				c.tid = 0
-			}
 			var res *logtail.ObjectInfoJson
-			if res, err = data.GetCheckpointMetaInfo(c.tid); err != nil {
+			if res, err = data.GetCheckpointMetaInfo(); err != nil {
 				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v\n", c.cid, err))
 			}
 
@@ -1170,7 +1167,9 @@ func (c *ckpStatArg) Run() (err error) {
 		if size, ok := tabledel[tables[i].ID]; ok {
 			tables[i].DeleteSize = formatBytes(size)
 		}
-		checkpointJson.Tables = append(checkpointJson.Tables, *tables[i])
+		if c.all || c.limit != invalidLimit || c.tid == tables[i].ID {
+			checkpointJson.Tables = append(checkpointJson.Tables, *tables[i])
+		}
 	}
 	checkpointJson.TableCnt = len(checkpointJson.Tables)
 
@@ -1463,28 +1462,29 @@ func (c *ckpListArg) DownLoadEntries(ctx context.Context) (cnt int, err error) {
 	metaDir := "meta_0-0_" + entry.GetEnd().ToString()
 	metaName := "meta_" + entry.GetStart().ToString() + "_" + entry.GetEnd().ToString() + ".ckp"
 
-	down := func(name, dir string) error {
+	down := func(name, newName, dir string) error {
 		cnt++
 		return backup.DownloadFile(
 			ctx,
 			c.ctx.db.Runtime.Fs.Service,
 			c.ctx.db.Runtime.LocalFs.Service,
 			name,
+			newName,
 			dir,
 			checkpointDir+metaDir,
 		)
 	}
 
-	if err = down(metaName, checkpointDir); err != nil {
+	if err = down(metaName, "", checkpointDir); err != nil {
 		return 0, err
 	}
 
 	for _, entry := range entries {
-		if err = down(entry.GetTNLocation().Name().String(), ""); err != nil {
+		if err = down(entry.GetTNLocation().Name().String(), "", ""); err != nil {
 			return 0, err
 		}
 		if entry.GetLocation().Name().String() != entry.GetTNLocation().Name().String() {
-			if err = down(entry.GetLocation().Name().String(), ""); err != nil {
+			if err = down(entry.GetLocation().Name().String(), "", ""); err != nil {
 				return 0, err
 			}
 		}
@@ -1494,7 +1494,7 @@ func (c *ckpListArg) DownLoadEntries(ctx context.Context) (cnt int, err error) {
 		}
 		locs := data.GetLocations()
 		for _, loc := range locs {
-			if err = down(loc.Name().String(), ""); err != nil {
+			if err = down(loc.Name().String(), "", ""); err != nil {
 				return 0, err
 			}
 		}

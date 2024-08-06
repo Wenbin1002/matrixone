@@ -608,10 +608,12 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, d
 	return hasher.Sum(nil), nil
 }
 
-func DownloadFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, srcDir, dstDir string) error {
-	newName := name
+func DownloadFile(ctx context.Context, srcFs, dstFs fileservice.FileService, name, newName, srcDir, dstDir string) error {
+	if newName == "" {
+		newName = name
+	}
 	if dstDir != "" {
-		newName = path.Join(dstDir, name)
+		newName = path.Join(dstDir, newName)
 	}
 	if srcDir != "" {
 		name = path.Join(srcDir, name)

@@ -2867,12 +2867,7 @@ type ObjectInfoJson struct {
 	Tables []TableInfoJson `json:"tables,omitempty"`
 }
 
-type CheckpointInfoJson struct {
-	CheckpointDataCount int              `json:"checkpoint_data_count"`
-	CheckpointData      []ObjectInfoJson `json:"data"`
-}
-
-func (data *CheckpointData) GetCheckpointMetaInfo(id uint64) (res *ObjectInfoJson, err error) {
+func (data *CheckpointData) GetCheckpointMetaInfo() (res *ObjectInfoJson, err error) {
 	tombstone := make(map[string]struct{})
 	tombstoneInfo := make(map[uint64]*tableinfo)
 	for i := range data.bats[BLKMetaInsertIDX].Length() {
@@ -2943,10 +2938,8 @@ func (data *CheckpointData) GetCheckpointMetaInfo(id uint64) (res *ObjectInfoJso
 			Add:    tableinfos[i].add,
 			Delete: tableinfos[i].delete,
 		}
-		if id == 0 || tablejson.ID == id {
-			tables[tablejson.ID] = len(tableJsons)
-			tableJsons = append(tableJsons, tablejson)
-		}
+		tables[tablejson.ID] = len(tableJsons)
+		tableJsons = append(tableJsons, tablejson)
 	}
 	tableinfos2 := make([]*tableinfo, 0)
 	objectCount2 := uint64(0)
@@ -2972,9 +2965,7 @@ func (data *CheckpointData) GetCheckpointMetaInfo(id uint64) (res *ObjectInfoJso
 			TombstoneRows:  tableinfos2[i].add,
 			TombstoneCount: tableinfos2[i].delete,
 		}
-		if id == 0 || tablejson.ID == id {
-			tableJsons = append(tableJsons, tablejson)
-		}
+		tableJsons = append(tableJsons, tablejson)
 	}
 
 	res = &ObjectInfoJson{
