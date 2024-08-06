@@ -175,16 +175,14 @@ func (c *MoInspectArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *MoInspectArg) String() string {
-	return "mo_inspect"
+	return c.Usage()
 }
 
 func (c *MoInspectArg) Usage() (res string) {
-	res += "Offline Commands:\n"
-	res += fmt.Sprintf("  %-8v show object information\n", "object")
-
-	res += "\n"
-	res += "Online Commands:\n"
-	res += fmt.Sprintf("  %-8v show table information\n", "table")
+	res += "Commands:\n"
+	res += fmt.Sprintf("  %-15v object analysis tool (offline)\n", "object")
+	res += fmt.Sprintf("  %-15v table analysis tool (online)\n", "table")
+	res += fmt.Sprintf("  %-15v checkpoint analysis tool (online/offline)\n", "checkpoint")
 
 	res += "\n"
 	res += "Usage:\n"
