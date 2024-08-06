@@ -48,7 +48,8 @@ const (
 	standard = 1
 	detailed = 2
 
-	sid = "inspect"
+	sid           = "inspect"
+	checkpointDir = "ckp/"
 )
 
 func offlineInit() {
@@ -1428,10 +1429,6 @@ func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
 
 	return
 }
-
-const (
-	checkpointDir = "ckp/"
-)
 
 func (c *ckpListArg) DownLoadEntries(ctx context.Context) (cnt int, err error) {
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
