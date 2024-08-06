@@ -21,11 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/backup"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -44,7 +47,19 @@ const (
 	brief    = 0
 	standard = 1
 	detailed = 2
+
+	sid = "inspect"
 )
+
+func offlineInit() {
+	logutil.SetupMOLogger(&logutil.LogConfig{
+		Level:  "fatal",
+		Format: "console",
+	})
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(sid, rt)
+	blockio.Start(sid)
+}
 
 type ColumnJson struct {
 	Index       uint16 `json:"col_index"`
@@ -1070,6 +1085,15 @@ func (c *ckpStatArg) Usage() (res string) {
 
 func (c *ckpStatArg) Run() (err error) {
 	ctx := context.Background()
+	var fs fileservice.FileService
+	if c.ctx == nil {
+		fs, err = initFs(ctx, c.path, true)
+		if err != nil {
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fs %v, %v", c.cid, err))
+		}
+	} else {
+		fs = c.ctx.db.Runtime.Fs.Service
+	}
 	checkpointJson := logtail.ObjectInfoJson{}
 	entries, err := getCkpEntries(ctx, c.ctx, c.path, c.name, false)
 	if err != nil {
@@ -1079,22 +1103,16 @@ func (c *ckpStatArg) Run() (err error) {
 	locations := make([]objectio.Location, 0, len(entries))
 	versions := make([]uint32, 0, len(entries))
 	for _, entry := range entries {
+		if c.ctx == nil {
+			offlineInit()
+			entry.SetSid(sid)
+		}
 		if c.cid == "" || entry.GetEnd().ToString() == c.cid {
 			var data *logtail.CheckpointData
-			var Fs *objectio.ObjectFS
-			if c.ctx == nil {
-				fs, err := initFs(ctx, entry.GetEnd().ToString(), true)
-				if err != nil {
-					return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fs %v, %v", c.cid, err))
-				}
-				Fs = &objectio.ObjectFS{
-					Service: fs,
-					Dir:     c.path,
-				}
-			} else {
-				Fs = c.ctx.db.Runtime.Fs
-			}
-			data, err = getCkpData(ctx, entry, Fs)
+			data, err = getCkpData(ctx, entry, &objectio.ObjectFS{
+				Service: fs,
+				Dir:     c.path,
+			})
 			if err != nil {
 				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
 			}
@@ -1130,10 +1148,8 @@ func (c *ckpStatArg) Run() (err error) {
 	tableins := make(map[uint64]uint64)
 	tabledel := make(map[uint64]uint64)
 	ins, del, err := logtail.GetStorageUsageHistory(
-		ctx, c.ctx.db.Runtime.SID(),
-		locations, versions,
-		c.ctx.db.Runtime.Fs.Service,
-		common.CheckpointAllocator,
+		ctx, sid, locations, versions,
+		fs, common.CheckpointAllocator,
 	)
 	if err != nil {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get storage usage %v", err))
@@ -1211,16 +1227,16 @@ func getCkpData(
 	fs *objectio.ObjectFS,
 ) (data *logtail.CheckpointData, err error) {
 	if data, err = entry.PrefetchMetaIdx(ctx, fs); err != nil {
-		return nil, moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
+		return nil, err
 	}
 	if err = entry.ReadMetaIdx(ctx, fs, data); err != nil {
-		return nil, moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
+		return nil, err
 	}
 	if err = entry.Prefetch(ctx, fs, data); err != nil {
-		return nil, moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
+		return nil, err
 	}
 	if err = entry.Read(ctx, fs, data); err != nil {
-		return nil, moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
+		return nil, err
 	}
 
 	return
@@ -1422,38 +1438,40 @@ func (c *ckpListArg) DownLoadEntries(ctx context.Context) (cnt int, err error) {
 	entry := entries[len(entries)-1]
 	metaDir := "meta_0-0_" + entry.GetEnd().ToString()
 	metaName := "meta_" + entry.GetStart().ToString() + "_" + entry.GetEnd().ToString() + ".ckp"
-	for i, entry := range entries {
+
+	down := func(name, dir string) error {
+		cnt++
+		return backup.DownloadFile(
+			ctx,
+			c.ctx.db.Runtime.Fs.Service,
+			c.ctx.db.Runtime.LocalFs.Service,
+			name,
+			dir,
+			checkpointDir+metaDir,
+		)
+	}
+
+	if err = down(metaName, checkpointDir); err != nil {
+		return 0, err
+	}
+
+	for _, entry := range entries {
+		logutil.Infof("[checkpointStat] %v", entry.GetTNLocation().Name().String())
+		if err = down(entry.GetTNLocation().Name().String(), ""); err != nil {
+			return 0, err
+		}
+		if entry.GetLocation().Name().String() != entry.GetTNLocation().Name().String() {
+			if err = down(entry.GetLocation().Name().String(), ""); err != nil {
+				return 0, err
+			}
+		}
 		data, err := getCkpData(context.Background(), entry, c.ctx.db.Runtime.Fs)
 		if err != nil {
 			return 0, err
 		}
 		locs := data.GetLocations()
 		for _, loc := range locs {
-			cnt++
-			err = backup.DownloadFile(
-				ctx,
-				c.ctx.db.Runtime.Fs.Service,
-				c.ctx.db.Runtime.LocalFs.Service,
-				loc.Name().String(),
-				"",
-				checkpointDir+metaDir,
-			)
-			if err != nil {
-				return 0, err
-			}
-		}
-
-		if i == len(entries)-1 {
-			cnt++
-			err = backup.DownloadFile(
-				ctx,
-				c.ctx.db.Runtime.Fs.Service,
-				c.ctx.db.Runtime.LocalFs.Service,
-				metaName,
-				checkpointDir,
-				checkpointDir+metaDir,
-			)
-			if err != nil {
+			if err = down(loc.Name().String(), ""); err != nil {
 				return 0, err
 			}
 		}
