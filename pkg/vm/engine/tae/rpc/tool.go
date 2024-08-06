@@ -110,7 +110,7 @@ func getInputs(input string, result *[]int) error {
 		item = strings.TrimSpace(item)
 		num, err := strconv.Atoi(item)
 		if err != nil {
-			return moerr.NewInfoNoCtx(fmt.Sprintf("invalid number '%s'", item))
+			return moerr.NewInfoNoCtx(fmt.Sprintf("invalid number '%s'\n", item))
 		}
 		*result = append(*result, num)
 	}
@@ -225,7 +225,7 @@ func (c *ObjArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *ObjArg) String() string {
-	return "object"
+	return c.Usage()
 }
 
 func (c *ObjArg) Usage() (res string) {
@@ -295,7 +295,7 @@ func (c *moObjStatArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *moObjStatArg) String() string {
-	return c.res
+	return c.res + "\n"
 }
 
 func (c *moObjStatArg) Usage() (res string) {
@@ -337,11 +337,11 @@ func (c *moObjStatArg) Run() (err error) {
 
 	fs, err := initFs(ctx, c.dir, c.local)
 	if err != nil {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fs: %v", err))
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fs: %v\n", err))
 	}
 
 	if c.reader, err = InitReader(fs, c.name); err != nil {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader %v", err))
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader %v\n", err))
 	}
 
 	c.res, err = c.GetStat(ctx)
@@ -375,11 +375,11 @@ func InitReader(fs fileservice.FileService, name string) (reader *objectio.Objec
 
 func (c *moObjStatArg) checkInputs() error {
 	if c.level != brief && c.level != standard && c.level != detailed {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid level %v, should be 0, 1, 2 ", c.level))
+		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid level %v, should be 0, 1, 2 \n", c.level))
 	}
 
 	if c.name == "" {
-		return moerr.NewInfoNoCtx("empty name")
+		return moerr.NewInfoNoCtx("empty name\n")
 	}
 
 	return nil
@@ -389,11 +389,11 @@ func (c *moObjStatArg) GetStat(ctx context.Context) (res string, err error) {
 	var m *mpool.MPool
 	var meta objectio.ObjectMeta
 	if m, err = mpool.NewMPool("data", 0, mpool.NoFixed); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to init mpool, err: %v", err))
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to init mpool, err: %v\n", err))
 		return
 	}
 	if meta, err = c.reader.ReadAllMeta(ctx, m); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to read meta, err: %v", err))
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to read meta, err: %v\n", err))
 		return
 	}
 
@@ -436,7 +436,7 @@ func (c *moObjStatArg) GetObjSize(data *objectio.ObjectDataMeta) []string {
 func (c *moObjStatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err error) {
 	data, ok := (*obj).DataMeta()
 	if !ok {
-		err = moerr.NewInfoNoCtx("no data")
+		err = moerr.NewInfoNoCtx("no data\n")
 		return
 	}
 
@@ -468,7 +468,7 @@ func (c *moObjStatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err e
 func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, err error) {
 	data, ok := (*obj).DataMeta()
 	if !ok {
-		err = moerr.NewInfoNoCtx("no data")
+		err = moerr.NewInfoNoCtx("no data\n")
 		return
 	}
 
@@ -478,7 +478,7 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 
 	colCnt := header.ColumnCount()
 	if c.col != invalidId && c.col >= int(colCnt) {
-		return "", moerr.NewInfoNoCtx("invalid column count")
+		return "", moerr.NewInfoNoCtx("invalid column count\n")
 	}
 	cols := make([]ColumnJson, 0, colCnt)
 	addColumn := func(idx uint16) {
@@ -526,7 +526,7 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, err error) {
 	data, ok := (*obj).DataMeta()
 	if !ok {
-		err = moerr.NewInfoNoCtx("no data")
+		err = moerr.NewInfoNoCtx("no data\n")
 		return
 	}
 
@@ -534,7 +534,7 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 	blocks := make([]objectio.BlockObject, 0, cnt)
 	if c.id != invalidId {
 		if uint32(c.id) >= cnt {
-			err = moerr.NewInfoNoCtx(fmt.Sprintf("id %v out of block count %v", c.id, cnt))
+			err = moerr.NewInfoNoCtx(fmt.Sprintf("id %v out of block count %v\n", c.id, cnt))
 			return
 		}
 		blocks = append(blocks, data.GetBlockMeta(uint32(c.id)))
@@ -663,7 +663,7 @@ func (c *objGetArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *objGetArg) String() string {
-	return c.res
+	return c.res + "\n"
 }
 
 func (c *objGetArg) Usage() (res string) {
@@ -693,7 +693,7 @@ func (c *objGetArg) Usage() (res string) {
 func (c *objGetArg) Run() (err error) {
 	ctx := context.Background()
 	if err = c.checkInputs(); err != nil {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid inputs: %v\n", err))
+		return moerr.NewInfoNoCtx(fmt.Sprintf("invalid inputs: %v\n\n", err))
 	}
 
 	if c.ctx != nil {
@@ -702,11 +702,11 @@ func (c *objGetArg) Run() (err error) {
 
 	fs, err := initFs(ctx, c.dir, c.local)
 	if err != nil {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fs: %v", err))
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fs: %v\n", err))
 	}
 
 	if c.reader, err = InitReader(fs, c.name); err != nil {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader %v", err))
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader %v\n", err))
 	}
 
 	c.res, err = c.GetData(ctx)
@@ -722,10 +722,10 @@ func (c *objGetArg) checkInputs() error {
 		return err
 	}
 	if len(c.rows) > 2 || (len(c.rows) == 2 && c.rows[0] >= c.rows[1]) {
-		return moerr.NewInfoNoCtx("invalid rows, need two inputs [leftm, right)")
+		return moerr.NewInfoNoCtx("invalid rows, need two inputs [leftm, right)\n")
 	}
 	if c.name == "" {
-		return moerr.NewInfoNoCtx("empty name")
+		return moerr.NewInfoNoCtx("empty name\n")
 	}
 
 	return nil
@@ -735,19 +735,19 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 	var m *mpool.MPool
 	var meta objectio.ObjectMeta
 	if m, err = mpool.NewMPool("data", 0, mpool.NoFixed); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to init mpool, err: %v", err))
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to init mpool, err: %v\n", err))
 		return
 	}
 	ctx1, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if meta, err = c.reader.ReadAllMeta(ctx1, m); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to read meta, err: %v", err))
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to read meta, err: %v\n", err))
 		return
 	}
 
 	cnt := meta.DataMetaCount()
 	if c.id == invalidId || uint16(c.id) >= cnt {
-		err = moerr.NewInfoNoCtx("invalid id")
+		err = moerr.NewInfoNoCtx("invalid id\n")
 		return
 	}
 
@@ -765,7 +765,7 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 	for _, i := range c.cols {
 		idx := uint16(i)
 		if idx >= cnt {
-			err = moerr.NewInfoNoCtx(fmt.Sprintf("column %v out of colum count %v", idx, cnt))
+			err = moerr.NewInfoNoCtx(fmt.Sprintf("column %v out of colum count %v\n", idx, cnt))
 			return
 		}
 		col := blk.ColumnMeta(idx)
@@ -792,7 +792,7 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 				right = c.rows[1]
 			}
 			if uint32(left) >= blk.GetRows() || uint32(right) > blk.GetRows() {
-				err = moerr.NewInfoNoCtx(fmt.Sprintf("invalid rows %v out of row count %v", c.rows, blk.GetRows()))
+				err = moerr.NewInfoNoCtx(fmt.Sprintf("invalid rows %v out of row count %v\n", c.rows, blk.GetRows()))
 				return
 			}
 			vec, _ = vec.Window(left, right)
@@ -845,7 +845,7 @@ func (c *TableArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *TableArg) String() string {
-	return "table"
+	return c.Usage()
 }
 
 func (c *TableArg) Usage() (res string) {
@@ -897,7 +897,7 @@ func (c *tableStatArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *tableStatArg) String() string {
-	return c.res
+	return c.res + "\n"
 }
 
 func (c *tableStatArg) Usage() (res string) {
@@ -917,21 +917,21 @@ func (c *tableStatArg) Usage() (res string) {
 
 func (c *tableStatArg) Run() (err error) {
 	if c.ctx == nil {
-		return moerr.NewInfoNoCtx("it is an online command")
+		return moerr.NewInfoNoCtx("it is an online command\n")
 	}
 	if c.did == 0 {
-		return moerr.NewInfoNoCtx("invalid database id")
+		return moerr.NewInfoNoCtx("invalid database id\n")
 	}
 	if c.tid == 0 {
-		return moerr.NewInfoNoCtx("invalid table id")
+		return moerr.NewInfoNoCtx("invalid table id\n")
 	}
 	db, err := c.ctx.db.Catalog.GetDatabaseByID(uint64(c.did))
 	if err != nil {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get db %v", c.did))
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get db %v\n", c.did))
 	}
 	table, err := db.GetTableEntryByID(uint64(c.tid))
 	if err != nil {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get table %v", c.tid))
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get table %v\n", c.tid))
 	}
 	c.name = table.GetFullName()
 	it := table.MakeObjectIt(true)
@@ -1054,7 +1054,7 @@ func (c *ckpStatArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *ckpStatArg) String() string {
-	return c.res
+	return c.res + "\n"
 }
 
 func (c *ckpStatArg) Usage() (res string) {
@@ -1083,12 +1083,15 @@ func (c *ckpStatArg) Usage() (res string) {
 }
 
 func (c *ckpStatArg) Run() (err error) {
+	if c.ctx == nil {
+		offlineInit()
+	}
 	ctx := context.Background()
 	var fs fileservice.FileService
 	if c.ctx == nil {
 		fs, err = initFs(ctx, c.path, true)
 		if err != nil {
-			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fs %v, %v", c.cid, err))
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init fs %v, %v\n", c.cid, err))
 		}
 	} else {
 		fs = c.ctx.db.Runtime.Fs.Service
@@ -1096,16 +1099,12 @@ func (c *ckpStatArg) Run() (err error) {
 	checkpointJson := logtail.ObjectInfoJson{}
 	entries, err := getCkpEntries(ctx, c.ctx, c.path, c.name, false)
 	if err != nil {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get ckp entries %s", err))
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get ckp entries %s\n", err))
 	}
 	tables := make(map[uint64]*logtail.TableInfoJson)
 	locations := make([]objectio.Location, 0, len(entries))
 	versions := make([]uint32, 0, len(entries))
 	for _, entry := range entries {
-		if c.ctx == nil {
-			offlineInit()
-			entry.SetSid(sid)
-		}
 		if c.cid == "" || entry.GetEnd().ToString() == c.cid {
 			var data *logtail.CheckpointData
 			data, err = getCkpData(ctx, entry, &objectio.ObjectFS{
@@ -1113,14 +1112,14 @@ func (c *ckpStatArg) Run() (err error) {
 				Dir:     c.path,
 			})
 			if err != nil {
-				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
+				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v\n", c.cid, err))
 			}
 			if c.all {
 				c.tid = 0
 			}
 			var res *logtail.ObjectInfoJson
 			if res, err = data.GetCheckpointMetaInfo(c.tid); err != nil {
-				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
+				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v\n", c.cid, err))
 			}
 
 			for i, val := range res.Tables {
@@ -1151,7 +1150,7 @@ func (c *ckpStatArg) Run() (err error) {
 		fs, common.CheckpointAllocator,
 	)
 	if err != nil {
-		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get storage usage %v", err))
+		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get storage usage %v\n", err))
 	}
 	for _, datas := range ins {
 		for _, data := range datas {
@@ -1198,11 +1197,7 @@ func readCkpFromDisk(ctx context.Context, path, name string) (res []*checkpoint.
 	if err != nil {
 		return nil, err
 	}
-	reader, err := InitReader(fs, name)
-	if err != nil {
-		return nil, err
-	}
-	res, err = checkpoint.ReplayCheckpointEntry(ctx, reader)
+	res, err = checkpoint.ReplayCheckpointEntry(ctx, sid, name, fs)
 	if err != nil {
 		return nil, err
 	}
@@ -1226,6 +1221,9 @@ func readCkpFromDisk(ctx context.Context, path, name string) (res []*checkpoint.
 func getCkpEntries(ctx context.Context, context *inspectContext, path, name string, all bool) (entries []*checkpoint.CheckpointEntry, err error) {
 	if context == nil {
 		entries, err = readCkpFromDisk(ctx, path, name)
+		for _, entry := range entries {
+			entry.SetSid(sid)
+		}
 	} else {
 		if all {
 			entries = context.db.BGCheckpointRunner.GetAllGlobalCheckpoints()
@@ -1314,7 +1312,7 @@ func (c *ckpListArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (c *ckpListArg) String() string {
-	return c.res
+	return c.res + "\n"
 }
 
 func (c *ckpListArg) Usage() (res string) {
@@ -1344,13 +1342,19 @@ func (c *ckpListArg) Usage() (res string) {
 }
 
 func (c *ckpListArg) Run() (err error) {
+	if c.ctx == nil {
+		offlineInit()
+	}
 	ctx := context.Background()
 	if c.download {
+		if c.ctx == nil {
+			return moerr.NewInfoNoCtx("can not download checkpoints offline\n")
+		}
 		cnt, err := c.DownLoadEntries(ctx)
 		if err != nil {
-			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to download entries, err %v", err))
+			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to download entries, err %v\n", err))
 		}
-		c.res = fmt.Sprintf("downloaded %d entries", cnt)
+		c.res = fmt.Sprintf("downloaded %d entries\n", cnt)
 		return nil
 	}
 
@@ -1359,7 +1363,6 @@ func (c *ckpListArg) Run() (err error) {
 	} else {
 		c.res, err = c.getTableList(ctx)
 	}
-
 	return
 }
 
@@ -1419,13 +1422,21 @@ func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
 	if err != nil {
 		return "", err
 	}
+	var fs fileservice.FileService
+	if c.ctx == nil {
+		fs, err = initFs(ctx, c.path, true)
+	} else {
+		fs = c.ctx.db.Runtime.Fs.Service
+	}
 	var ids []uint64
 	for _, entry := range entries {
 		if entry.GetEnd().ToString() != c.cid {
 			continue
 		}
-
-		data, _ := getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
+		data, _ := getCkpData(ctx, entry, &objectio.ObjectFS{
+			Service: fs,
+			Dir:     c.path,
+		})
 		ids = data.GetTableIds()
 	}
 	cnt := len(ids)

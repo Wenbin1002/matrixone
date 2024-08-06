@@ -17,9 +17,6 @@ package checkpoint
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"sort"
 	"sync"
 	"time"
@@ -295,59 +292,16 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	return
 }
 
-func ReadAll(
-	ctx context.Context,
-	reader *objectio.ObjectReader,
-	m *mpool.MPool,
-) ([]*batch.Batch, func(), error) {
-	meta, err := reader.ReadAllMeta(ctx, m)
-	if err != nil {
-		return nil, nil, err
-	}
-	dataMeta := meta.MustDataMeta()
-	if dataMeta.BlockHeader().MetaLocation().End() == 0 {
-		return nil, nil, nil
-	}
-	block := dataMeta.GetBlockMeta(0)
-	idxs := make([]uint16, block.GetColumnCount())
-	for i := range idxs {
-		idxs[i] = uint16(i)
-	}
-
-	bats := make([]*batch.Batch, 0)
-
-	ioVectors, err := reader.ReadAll(ctx, idxs, nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer func() {
-		if err != nil {
-			if ioVectors != nil {
-				objectio.ReleaseIOVector(ioVectors)
-			}
-		}
-	}()
-	for y := 0; y < int(dataMeta.BlockCount()); y++ {
-		bat := batch.NewWithSize(len(idxs))
-		var obj any
-		for i := range idxs {
-			obj, err = objectio.Decode(ioVectors.Entries[y*len(idxs)+i].CachedData.Bytes())
-			if err != nil {
-				return nil, nil, err
-			}
-			bat.Vecs[i] = obj.(*vector.Vector)
-			bat.SetRowCount(bat.Vecs[i].Length())
-		}
-		bats = append(bats, bat)
-	}
-	return bats, func() { objectio.ReleaseIOVector(ioVectors) }, nil
-}
-
 func ReplayCheckpointEntry(
 	ctx context.Context,
-	reader *objectio.ObjectReader,
+	sid, name string,
+	fs fileservice.FileService,
 ) (entries []*CheckpointEntry, err error) {
-	bats, closeCB, err := ReadAll(ctx, reader, common.CheckpointAllocator)
+	reader, err := blockio.NewFileReader(sid, fs, name)
+	if err != nil {
+		return
+	}
+	bats, closeCB, err := reader.LoadAllColumns(ctx, nil, common.CheckpointAllocator)
 	if err != nil {
 		return
 	}
