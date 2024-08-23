@@ -202,9 +202,9 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 				&id,
 				ts,
 			); err == nil {
-				logutil.Infof("asdfasdf transferDeletes")
 				continue
 			}
+			logutil.Infof("asdfasdf transferDeletes")
 
 			// if the error is not a r-w conflict. something wrong really happened
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict) {
