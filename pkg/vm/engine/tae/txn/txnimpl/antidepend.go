@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,6 +40,7 @@ func readWriteConfilictCheck(entry *catalog.ObjectEntry, ts types.TS) (err error
 		lastNode = entry.GetLatestNode()
 	}
 	if lastNode.DeleteBefore(ts) {
+		logutil.Infof("asdfasdf rw check")
 		err = ErrRWConflict
 	}
 	return
@@ -120,6 +122,7 @@ func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
 	// 	logutil.Infof("checkOne blk=%s ts=%s err=%v", id.BlockString(), ts.ToString(), err)
 	// }()
 	if checker.HasConflict(*id.ObjectID()) {
+		logutil.Infof("asdfasdf check one")
 		err = ErrRWConflict
 		return
 	}
