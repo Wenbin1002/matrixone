@@ -168,6 +168,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 	}
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	if err = readWriteConfilictCheck(entry, ts); err == nil {
+		logutil.Infof("asdfasdf transferDelete")
 		return
 	}
 	err = nil
@@ -201,6 +202,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 				&id,
 				ts,
 			); err == nil {
+				logutil.Infof("asdfasdf transferDeletes")
 				continue
 			}
 
@@ -263,6 +265,7 @@ func (tbl *txnTable) recurTransferDelete(
 	err := tbl.store.warChecker.checkOne(newID, ts)
 	if err == nil {
 		//transfer the deletes to the target block.
+		logutil.Infof("asdfasdf reTransferDelete")
 		if err = tbl.RangeDelete(newID, offset, offset, pk, handle.DT_Normal); err != nil {
 			return err
 		}
