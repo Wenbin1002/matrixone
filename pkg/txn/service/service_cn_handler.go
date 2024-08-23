@@ -257,24 +257,24 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	}
 
 	// fast path: write in only one DNShard.
-	//if len(newTxn.TNShards) == 1 {
-	//	util.LogTxnStart1PCCommit(s.logger, newTxn)
-	//
-	//	commitTS, err := s.storage.Commit(ctx, newTxn)
-	//	v2.TxnTNCommitHandledCounter.Inc()
-	//	if err != nil {
-	//		util.LogTxnStart1PCCommitFailed(s.logger, newTxn, err)
-	//		response.TxnError = txn.WrapError(err, moerr.ErrTAECommit)
-	//		changeStatus(txn.TxnStatus_Aborted)
-	//	} else {
-	//		newTxn.CommitTS = commitTS
-	//		txnCtx.updateTxnLocked(newTxn)
-	//
-	//		changeStatus(txn.TxnStatus_Committed)
-	//		util.LogTxn1PCCommitCompleted(s.logger, newTxn)
-	//	}
-	//	return nil
-	//}
+	if len(newTxn.TNShards) == 1 {
+		util.LogTxnStart1PCCommit(s.logger, newTxn)
+
+		commitTS, err := s.storage.Commit(ctx, newTxn)
+		v2.TxnTNCommitHandledCounter.Inc()
+		if err != nil {
+			util.LogTxnStart1PCCommitFailed(s.logger, newTxn, err)
+			response.TxnError = txn.WrapError(err, moerr.ErrTAECommit)
+			changeStatus(txn.TxnStatus_Aborted)
+		} else {
+			newTxn.CommitTS = commitTS
+			txnCtx.updateTxnLocked(newTxn)
+
+			changeStatus(txn.TxnStatus_Committed)
+			util.LogTxn1PCCommitCompleted(s.logger, newTxn)
+		}
+		return nil
+	}
 
 	util.LogTxnStart2PCCommit(s.logger, newTxn)
 
