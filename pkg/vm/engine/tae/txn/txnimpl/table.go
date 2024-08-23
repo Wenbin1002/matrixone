@@ -265,7 +265,6 @@ func (tbl *txnTable) recurTransferDelete(
 	err := tbl.store.warChecker.checkOne(newID, ts)
 	if err == nil {
 		//transfer the deletes to the target block.
-		logutil.Infof("asdfasdf reTransferDelete")
 		if err = tbl.RangeDelete(newID, offset, offset, pk, handle.DT_Normal); err != nil {
 			return err
 		}
@@ -282,6 +281,7 @@ func (tbl *txnTable) recurTransferDelete(
 		})
 		return nil
 	}
+	logutil.Infof("asdfasdf reTransferDelete")
 	tbl.store.warChecker.conflictSet[*newID.ObjectID()] = true
 	//prepare for recursively transfer the deletes to the next target block.
 	if page2, ok = memo[blockID]; !ok {
