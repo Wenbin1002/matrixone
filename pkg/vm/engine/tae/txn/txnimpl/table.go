@@ -168,9 +168,9 @@ func (tbl *txnTable) TransferDeleteIntent(
 	}
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	if err = readWriteConfilictCheck(entry, ts); err == nil {
-		logutil.Infof("asdfasdf transferDelete")
 		return
 	}
+	logutil.Infof("asdfasdf transferDelete")
 	err = nil
 	nid = &common.ID{
 		TableID: id.TableID,
