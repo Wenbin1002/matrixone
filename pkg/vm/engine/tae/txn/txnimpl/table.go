@@ -358,6 +358,7 @@ func (tbl *txnTable) TransferDeleteRows(
 	// cannot find a transferred record. maybe the transferred record was TTL'ed
 	// here we can convert the error back to r-w conflict
 	if err != nil {
+		logutil.Infof("asdfasdf transfer delete error: %v", err)
 		err = moerr.NewTxnRWConflictNoCtx()
 		return
 	}
