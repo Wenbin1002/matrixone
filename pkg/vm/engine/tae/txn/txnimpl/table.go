@@ -204,7 +204,6 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 			); err == nil {
 				continue
 			}
-			logutil.Infof("asdfasdf transferDeletes")
 
 			// if the error is not a r-w conflict. something wrong really happened
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict) {
@@ -217,6 +216,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 			// ErrTxnRWConflict: the target block was also be compacted
 			// ErrTxnWWConflict: w-w error
 			if _, err = tbl.TransferDeleteNode(&id, node, offset, nodes.idx[offset], phase, ts); err != nil {
+				logutil.Infof("asdfasdf transferDeletes")
 				return
 			}
 
