@@ -45,13 +45,13 @@ const (
 
 type ColumnJson struct {
 	Index       uint16 `json:"col_index"`
-	Type        string `json:"col_type"`
+	Type        string `json:"col_type,omitempty"`
 	Ndv         uint32 `json:"ndv,omitempty"`
 	NullCnt     uint32 `json:"null_count,omitempty"`
 	DataSize    string `json:"data_size,omitempty"`
 	OriDataSize string `json:"original_data_size,omitempty"`
 	Zonemap     string `json:"zonemap,omitempty"`
-	Data        string `json:"data,omitempty"`
+	Data        []any  `json:"data,omitempty"`
 }
 
 type BlockJson struct {
@@ -623,6 +623,7 @@ func (c *objGetArg) PrepareCommand() *cobra.Command {
 	getCmd.Flags().StringP("name", "n", "", "name")
 	getCmd.Flags().StringP("col", "c", "", "col")
 	getCmd.Flags().StringP("row", "r", "", "row")
+	getCmd.Flags().StringP("find", "f", "", "find")
 	getCmd.Flags().BoolP("local", "", false, "local")
 
 	return getCmd
@@ -633,6 +634,7 @@ func (c *objGetArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.col, _ = cmd.Flags().GetString("col")
 	c.row, _ = cmd.Flags().GetString("row")
 	c.local, _ = cmd.Flags().GetBool("local")
+	c.target, _ = cmd.Flags().GetString("find")
 	path, _ := cmd.Flags().GetString("name")
 	c.dir, c.name = filepath.Split(path)
 	if cmd.Flag("ictx") != nil {
@@ -757,7 +759,7 @@ func (c *objGetArg) getData(ctx context.Context) (res string, err error) {
 
 	cnt := meta.DataMetaCount()
 	if c.id == invalidId || uint16(c.id) >= cnt {
-		err = moerr.NewInfoNoCtx("invalid id")
+		err = moerr.NewInfoNoCtx(fmt.Sprintf("invalid id: %d out of %v", c.id, cnt))
 		return
 	}
 
@@ -835,247 +837,424 @@ func (c *objGetArg) getData(ctx context.Context) (res string, err error) {
 	return
 }
 
-func (c *objGetArg) getDataFromVector(v *vector.Vector) (data string) {
+func (c *objGetArg) getDataFromVector(v *vector.Vector) []any {
 	switch v.GetType().Oid {
 
 	case types.T_bool:
-		data = v.String()
-
+		vec := vector.MustFixedCol[bool](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
+				}
+			}
+			return nil
+		}
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
+		}
+		return toAnySlice(data)
 	case types.T_bit:
 		vec := vector.MustFixedCol[uint64](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if string(val) == c.target {
-					return string(i)
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		data = v.String()
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
+		}
+		return toAnySlice(data)
 	case types.T_int8:
 		vec := vector.MustFixedCol[int8](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if string(val) == c.target {
-					return string(i)
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		data = v.String()
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
+		}
+		return toAnySlice(data)
 	case types.T_int16:
 		vec := vector.MustFixedCol[int16](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if string(val) == c.target {
-					return string(i)
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		data = v.String()
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
+		}
+		return toAnySlice(data)
 	case types.T_int32:
 		vec := vector.MustFixedCol[int32](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if string(val) == c.target {
-					return string(i)
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		data = v.String()
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
+		}
+		return toAnySlice(data)
 	case types.T_int64:
 		vec := vector.MustFixedCol[int64](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if string(val) == c.target {
-					return string(i)
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		data = v.String()
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
+		}
+		return toAnySlice(data)
 	case types.T_uint8:
 		vec := vector.MustFixedCol[uint8](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if string(val) == c.target {
-					return string(i)
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		data = v.String()
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
+		}
+		return toAnySlice(data)
 	case types.T_uint16:
 		vec := vector.MustFixedCol[uint16](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if string(val) == c.target {
-					return string(i)
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		data = v.String()
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
+		}
+		return toAnySlice(data)
 	case types.T_uint32:
 		vec := vector.MustFixedCol[uint32](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if string(val) == c.target {
-					return string(i)
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		data = v.String()
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
+		}
+		return toAnySlice(data)
 	case types.T_uint64:
 		vec := vector.MustFixedCol[uint64](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if string(val) == c.target {
-					return string(i)
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		data = v.String()
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
+		}
+		return toAnySlice(data)
 	case types.T_float32:
-		data = v.String()
+		vec := vector.MustFixedCol[float32](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
+				}
+			}
+			return nil
+		}
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
+		}
+		return toAnySlice(data)
 	case types.T_float64:
-		data = v.String()
-
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
-		// XXX shrink varlena, but did not shrink area.  For our vector, this
-		// may well be the right thing.  If want to shrink area as well, we
-		// have to copy each varlena value and swizzle pointer.
-		data = v.String()
+		vec := vector.MustFixedCol[float64](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
+				}
+			}
+			return nil
+		}
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
+		}
+		return toAnySlice(data)
+	case types.T_char, types.T_varchar, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+		area := v.GetArea()
+		vec := vector.MustFixedCol[types.Varlena](v)
+		data := make([]any, len(vec))
+		for i := range data {
+			data[i] = vec[i].GetString(area)
+			if data[i] == c.target {
+				return []any{fmt.Sprintf("idx %v, value %v", i, data[i])}
+			}
+		}
+		if c.target != "" {
+			return nil
+		}
+		return toAnySlice(data)
 	case types.T_date:
 		vec := vector.MustFixedCol[types.Date](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if val.String() == c.target {
-					return fmt.Sprintf("%v %v", i, val.String())
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		for i, val := range vec {
-			data += fmt.Sprintf("%v: %v", i, val.String())
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
 		}
+		return toAnySlice(data)
 	case types.T_datetime:
 		vec := vector.MustFixedCol[types.Datetime](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if val.String() == c.target {
-					return fmt.Sprintf("%v %v", i, val.String())
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		for i, val := range vec {
-			data += fmt.Sprintf("%v: %v", i, val.String())
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
 		}
+		return toAnySlice(data)
 	case types.T_time:
 		vec := vector.MustFixedCol[types.Time](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if val.String() == c.target {
-					return fmt.Sprintf("%v %v", i, val.String())
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		for i, val := range vec {
-			data += fmt.Sprintf("%v: %v", i, val.String())
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
 		}
+		return toAnySlice(data)
 	case types.T_timestamp:
 		vec := vector.MustFixedCol[types.Timestamp](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if val.String() == c.target {
-					return fmt.Sprintf("%v %v", i, val.String())
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		for i, val := range vec {
-			data += fmt.Sprintf("%v: %v", i, val.String())
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
 		}
+		return toAnySlice(data)
 	case types.T_enum:
 		vec := vector.MustFixedCol[types.Enum](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if val.String() == c.target {
-					return fmt.Sprintf("%v %v", i, val.String())
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		for i, val := range vec {
-			data += fmt.Sprintf("%v: %v", i, val.String())
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
 		}
+		return toAnySlice(data)
 	case types.T_decimal64:
-		data = v.String()
+		if c.target != "" {
+			return nil
+		}
+		return toAnySlice(vector.MustFixedCol[types.Decimal64](v))
 	case types.T_decimal128:
-		data = v.String()
+		if c.target != "" {
+			return nil
+		}
+		return toAnySlice(vector.MustFixedCol[types.Decimal128](v))
 	case types.T_uuid:
 		vec := vector.MustFixedCol[types.Uuid](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if val.String() == c.target {
-					return fmt.Sprintf("%v %v", i, val.String())
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		for i, val := range vec {
-			data += fmt.Sprintf("%v: %v", i, val.String())
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
 		}
+		return toAnySlice(data)
 	case types.T_TS:
 		vec := vector.MustFixedCol[types.TS](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if val.ToString() == c.target {
-					return fmt.Sprintf("%v %v", i, val.ToString())
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		for i, val := range vec {
-			data += fmt.Sprintf("%v: %v", i, val.ToString())
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
 		}
+		return toAnySlice(data)
 	case types.T_Rowid:
 		vec := vector.MustFixedCol[types.Rowid](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if val.String() == c.target {
-					return fmt.Sprintf("%v %v", i, val.String())
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		for i, val := range vec {
-			data += fmt.Sprintf("%v: %v", i, val.String())
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
 		}
+		return toAnySlice(data)
 	case types.T_Blockid:
 		vec := vector.MustFixedCol[types.Blockid](v)
 		if c.target != "" {
 			for i, val := range vec {
-				if val.String() == c.target {
-					return fmt.Sprintf("%v %v", i, val.String())
+				if getString(v.GetType().Oid, val) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 				}
 			}
-			return
+			return nil
 		}
-		for i, val := range vec {
-			data += fmt.Sprintf("%v: %v", i, val.String())
+		data := make([]string, len(vec))
+		for i := range data {
+			data[i] = getString(v.GetType().Oid, vec[i])
 		}
+		return toAnySlice(data)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.GetType()))
 	}
-	return
+	return nil
+}
+
+func getString(oid types.T, v any) string {
+	switch oid {
+	case types.T_bool:
+		val := v.(bool)
+		if val {
+			return "true"
+		} else {
+			return "false"
+		}
+	case types.T_bit:
+		return strconv.FormatUint(v.(uint64), 10)
+	case types.T_int8:
+		return strconv.FormatInt(int64(v.(int8)), 10)
+	case types.T_int16:
+		return strconv.FormatInt(int64(v.(int16)), 10)
+	case types.T_int32:
+		return strconv.FormatInt(int64(v.(int32)), 10)
+	case types.T_int64:
+		return strconv.FormatInt(v.(int64), 10)
+	case types.T_uint8:
+		return strconv.FormatUint(uint64(v.(uint8)), 10)
+	case types.T_uint16:
+		return strconv.FormatUint(uint64(v.(uint16)), 10)
+	case types.T_uint32:
+		return strconv.FormatUint(uint64(v.(uint32)), 10)
+	case types.T_uint64:
+		return strconv.FormatUint(v.(uint64), 10)
+	case types.T_float32:
+		return strconv.FormatFloat(v.(float64), 'f', -1, 32)
+	case types.T_float64:
+		return strconv.FormatFloat(v.(float64), 'f', -1, 64)
+	case types.T_date:
+		val := v.(types.Date)
+		return val.String()
+	case types.T_datetime:
+		val := v.(types.Datetime)
+		return val.String()
+	case types.T_time:
+		val := v.(types.Time)
+		return val.String()
+	case types.T_timestamp:
+		val := v.(types.Timestamp)
+		return val.String()
+	case types.T_enum:
+		val := v.(types.Enum)
+		return val.String()
+	case types.T_uuid:
+		val := v.(types.Uuid)
+		return val.String()
+	case types.T_TS:
+		val := v.(types.TS)
+		return val.ToString()
+	case types.T_Rowid:
+		val := v.(types.Rowid)
+		return val.String()
+	case types.T_Blockid:
+		val := v.(types.Blockid)
+		return val.String()
+	default:
+		return ""
+	}
+}
+
+func toAnySlice[T any](data []T) []any {
+	result := make([]any, len(data))
+	for i, v := range data {
+		result[i] = v
+	}
+	return result
 }
 
 type TableArg struct {
