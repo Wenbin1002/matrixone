@@ -45,6 +45,7 @@ const (
 
 type ColumnJson struct {
 	Index       uint16 `json:"col_index"`
+	Type        string `json:"col_type"`
 	Ndv         uint32 `json:"ndv,omitempty"`
 	NullCnt     uint32 `json:"null_count,omitempty"`
 	DataSize    string `json:"data_size,omitempty"`
@@ -596,16 +597,16 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 }
 
 type objGetArg struct {
-	ctx        *inspectContext
-	dir        string
-	name       string
-	id         int
-	cols, rows []int
-	col, row   string
-	fs         fileservice.FileService
-	reader     *objectio.ObjectReader
-	res        string
-	local      bool
+	ctx         *inspectContext
+	dir         string
+	name        string
+	id          int
+	cols, rows  []int
+	col, row    string
+	fs          fileservice.FileService
+	reader      *objectio.ObjectReader
+	res, target string
+	local       bool
 }
 
 func (c *objGetArg) PrepareCommand() *cobra.Command {
@@ -684,7 +685,7 @@ func (c *objGetArg) Run() (err error) {
 		return moerr.NewInfoNoCtx(fmt.Sprintf("failed to init reader: %v", err))
 	}
 
-	c.res, err = c.GetData(ctx)
+	c.res, err = c.getData(ctx)
 
 	return
 }
@@ -740,7 +741,7 @@ func (c *objGetArg) checkInputs() error {
 	return nil
 }
 
-func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
+func (c *objGetArg) getData(ctx context.Context) (res string, err error) {
 	var m *mpool.MPool
 	var meta objectio.ObjectMeta
 	if m, err = mpool.NewMPool("data", 0, mpool.NoFixed); err != nil {
@@ -789,6 +790,7 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 	v, _ := c.reader.ReadOneBlock(ctx2, idxs, typs, uint16(c.id), m)
 	defer v.Release()
 	cols := make([]ColumnJson, 0, len(v.Entries))
+
 	for i, entry := range v.Entries {
 		obj, _ := objectio.Decode(entry.CachedData.Bytes())
 		vec := obj.(*vector.Vector)
@@ -807,9 +809,12 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 			vec, _ = vec.Window(left, right)
 		}
 
+		data := c.getDataFromVector(vec)
+
 		col := ColumnJson{
 			Index: uint16(c.cols[i]),
-			Data:  vec.String(),
+			Type:  vec.GetType().String(),
+			Data:  data,
 		}
 		cols = append(cols, col)
 	}
@@ -827,6 +832,249 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 
 	res = string(data)
 
+	return
+}
+
+func (c *objGetArg) getDataFromVector(v *vector.Vector) (data string) {
+	switch v.GetType().Oid {
+
+	case types.T_bool:
+		data = v.String()
+
+	case types.T_bit:
+		vec := vector.MustFixedCol[uint64](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if string(val) == c.target {
+					return string(i)
+				}
+			}
+			return
+		}
+		data = v.String()
+	case types.T_int8:
+		vec := vector.MustFixedCol[int8](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if string(val) == c.target {
+					return string(i)
+				}
+			}
+			return
+		}
+		data = v.String()
+	case types.T_int16:
+		vec := vector.MustFixedCol[int16](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if string(val) == c.target {
+					return string(i)
+				}
+			}
+			return
+		}
+		data = v.String()
+	case types.T_int32:
+		vec := vector.MustFixedCol[int32](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if string(val) == c.target {
+					return string(i)
+				}
+			}
+			return
+		}
+		data = v.String()
+	case types.T_int64:
+		vec := vector.MustFixedCol[int64](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if string(val) == c.target {
+					return string(i)
+				}
+			}
+			return
+		}
+		data = v.String()
+	case types.T_uint8:
+		vec := vector.MustFixedCol[uint8](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if string(val) == c.target {
+					return string(i)
+				}
+			}
+			return
+		}
+		data = v.String()
+	case types.T_uint16:
+		vec := vector.MustFixedCol[uint16](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if string(val) == c.target {
+					return string(i)
+				}
+			}
+			return
+		}
+		data = v.String()
+	case types.T_uint32:
+		vec := vector.MustFixedCol[uint32](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if string(val) == c.target {
+					return string(i)
+				}
+			}
+			return
+		}
+		data = v.String()
+	case types.T_uint64:
+		vec := vector.MustFixedCol[uint64](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if string(val) == c.target {
+					return string(i)
+				}
+			}
+			return
+		}
+		data = v.String()
+	case types.T_float32:
+		data = v.String()
+	case types.T_float64:
+		data = v.String()
+
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		// XXX shrink varlena, but did not shrink area.  For our vector, this
+		// may well be the right thing.  If want to shrink area as well, we
+		// have to copy each varlena value and swizzle pointer.
+		data = v.String()
+	case types.T_date:
+		vec := vector.MustFixedCol[types.Date](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if val.String() == c.target {
+					return fmt.Sprintf("%v %v", i, val.String())
+				}
+			}
+			return
+		}
+		for i, val := range vec {
+			data += fmt.Sprintf("%v: %v", i, val.String())
+		}
+	case types.T_datetime:
+		vec := vector.MustFixedCol[types.Datetime](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if val.String() == c.target {
+					return fmt.Sprintf("%v %v", i, val.String())
+				}
+			}
+			return
+		}
+		for i, val := range vec {
+			data += fmt.Sprintf("%v: %v", i, val.String())
+		}
+	case types.T_time:
+		vec := vector.MustFixedCol[types.Time](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if val.String() == c.target {
+					return fmt.Sprintf("%v %v", i, val.String())
+				}
+			}
+			return
+		}
+		for i, val := range vec {
+			data += fmt.Sprintf("%v: %v", i, val.String())
+		}
+	case types.T_timestamp:
+		vec := vector.MustFixedCol[types.Timestamp](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if val.String() == c.target {
+					return fmt.Sprintf("%v %v", i, val.String())
+				}
+			}
+			return
+		}
+		for i, val := range vec {
+			data += fmt.Sprintf("%v: %v", i, val.String())
+		}
+	case types.T_enum:
+		vec := vector.MustFixedCol[types.Enum](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if val.String() == c.target {
+					return fmt.Sprintf("%v %v", i, val.String())
+				}
+			}
+			return
+		}
+		for i, val := range vec {
+			data += fmt.Sprintf("%v: %v", i, val.String())
+		}
+	case types.T_decimal64:
+		data = v.String()
+	case types.T_decimal128:
+		data = v.String()
+	case types.T_uuid:
+		vec := vector.MustFixedCol[types.Uuid](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if val.String() == c.target {
+					return fmt.Sprintf("%v %v", i, val.String())
+				}
+			}
+			return
+		}
+		for i, val := range vec {
+			data += fmt.Sprintf("%v: %v", i, val.String())
+		}
+	case types.T_TS:
+		vec := vector.MustFixedCol[types.TS](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if val.ToString() == c.target {
+					return fmt.Sprintf("%v %v", i, val.ToString())
+				}
+			}
+			return
+		}
+		for i, val := range vec {
+			data += fmt.Sprintf("%v: %v", i, val.ToString())
+		}
+	case types.T_Rowid:
+		vec := vector.MustFixedCol[types.Rowid](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if val.String() == c.target {
+					return fmt.Sprintf("%v %v", i, val.String())
+				}
+			}
+			return
+		}
+		for i, val := range vec {
+			data += fmt.Sprintf("%v: %v", i, val.String())
+		}
+	case types.T_Blockid:
+		vec := vector.MustFixedCol[types.Blockid](v)
+		if c.target != "" {
+			for i, val := range vec {
+				if val.String() == c.target {
+					return fmt.Sprintf("%v %v", i, val.String())
+				}
+			}
+			return
+		}
+		for i, val := range vec {
+			data += fmt.Sprintf("%v: %v", i, val.String())
+		}
+	default:
+		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.GetType()))
+	}
 	return
 }
 
