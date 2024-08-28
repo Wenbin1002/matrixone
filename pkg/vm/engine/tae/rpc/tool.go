@@ -847,31 +847,42 @@ func (c *objGetArg) getData(ctx context.Context) (res string, err error) {
 
 func (c *objGetArg) getDataFromVector(v *vector.Vector) []any {
 	switch v.GetType().Oid {
-
 	case types.T_bool:
-		return getVectorData[bool](v, c.target, c.method)
+		vec := vector.MustFixedCol[bool](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_bit:
-		return getVectorData[uint64](v, c.target, c.method)
+		vec := vector.MustFixedCol[uint64](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_int8:
-		return getVectorData[int8](v, c.target, c.method)
+		vec := vector.MustFixedCol[int8](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_int16:
-		return getVectorData[int16](v, c.target, c.method)
+		vec := vector.MustFixedCol[int16](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_int32:
-		return getVectorData[int32](v, c.target, c.method)
+		vec := vector.MustFixedCol[int32](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_int64:
-		return getVectorData[int64](v, c.target, c.method)
+		vec := vector.MustFixedCol[int64](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_uint8:
-		return getVectorData[uint8](v, c.target, c.method)
+		vec := vector.MustFixedCol[uint8](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_uint16:
-		return getVectorData[uint16](v, c.target, c.method)
+		vec := vector.MustFixedCol[uint16](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_uint32:
-		return getVectorData[uint32](v, c.target, c.method)
+		vec := vector.MustFixedCol[uint32](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_uint64:
-		return getVectorData[uint64](v, c.target, c.method)
+		vec := vector.MustFixedCol[uint64](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_float32:
-		return getVectorData[float32](v, c.target, c.method)
+		vec := vector.MustFixedCol[float32](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_float64:
-		return getVectorData[float64](v, c.target, c.method)
+		vec := vector.MustFixedCol[float64](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		area := v.GetArea()
@@ -880,25 +891,22 @@ func (c *objGetArg) getDataFromVector(v *vector.Vector) []any {
 		for i := range vec {
 			data[i] = vec[i].GetByteSlice(area)
 		}
-		if c.target != "" {
-			for i, val := range vec {
-				if val.GetString(area) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		return executeMethod(v.GetType().Oid, toAnySlice(data), c.method)
+		return getVectorData(toAnySlice(data), v.GetType().Oid, c.target, c.method)
 	case types.T_date:
-		return getVectorData[types.Date](v, c.target, c.method)
+		vec := vector.MustFixedCol[types.Date](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_datetime:
-		return getVectorData[types.Datetime](v, c.target, c.method)
+		vec := vector.MustFixedCol[types.Datetime](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_time:
-		return getVectorData[types.Time](v, c.target, c.method)
+		vec := vector.MustFixedCol[types.Time](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_timestamp:
-		return getVectorData[types.Timestamp](v, c.target, c.method)
+		vec := vector.MustFixedCol[types.Timestamp](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_enum:
-		return getVectorData[types.Enum](v, c.target, c.method)
+		vec := vector.MustFixedCol[types.Enum](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_decimal64:
 		if c.target != "" {
 			return nil
@@ -910,19 +918,23 @@ func (c *objGetArg) getDataFromVector(v *vector.Vector) []any {
 		}
 		return toAnySlice(vector.MustFixedCol[types.Decimal128](v))
 	case types.T_uuid:
-		return getVectorData[types.Uuid](v, c.target, c.method)
+		vec := vector.MustFixedCol[types.Uuid](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_TS:
-		return getVectorData[types.TS](v, c.target, c.method)
+		vec := vector.MustFixedCol[types.TS](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_Rowid:
-		return getVectorData[types.Rowid](v, c.target, c.method)
+		vec := vector.MustFixedCol[types.Rowid](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	case types.T_Blockid:
-		return getVectorData[types.Blockid](v, c.target, c.method)
+		vec := vector.MustFixedCol[types.Blockid](v)
+		return getVectorData(toAnySlice(vec), v.GetType().Oid, c.target, c.method)
 	default:
 		return []any{v.String()}
 	}
 }
 
-func toString(oid types.T, v any) string {
+func getString(oid types.T, v any) string {
 	switch oid {
 	case types.T_bool:
 		val := v.(bool)
@@ -988,25 +1000,25 @@ func toString(oid types.T, v any) string {
 	}
 }
 
-func toStringSlice(oid types.T, v []any) []string {
+func getStringSlice(oid types.T, v []any) []string {
 	res := make([]string, len(v))
 	for i := range v {
-		res[i] = toString(oid, v[i])
+		res[i] = getString(oid, v[i])
 	}
 	return res
 }
 
-func getVectorData[T types.FixedSizeT](v *vector.Vector, target, method string) []any {
-	vec := vector.MustFixedCol[T](v)
+func getVectorData(vec []any, oid types.T, target, method string) []any {
+	data := executeMethod(oid, vec, method)
 	if target != "" {
-		for i, val := range vec {
-			if toString(v.GetType().Oid, val) == target {
+		for i, val := range data {
+			if val.(string) == target {
 				return []any{fmt.Sprintf("idx %v, value %v", i, val)}
 			}
 		}
 		return nil
 	}
-	return executeMethod(v.GetType().Oid, toAnySlice(vec), method)
+	return data
 }
 
 func toAnySlice[T any](data []T) []any {
@@ -1028,7 +1040,7 @@ func toTSlice[T any](data []any) []T {
 func executeMethod(oid types.T, vec []any, method string) []any {
 	switch method {
 	case "":
-		return toAnySlice(toStringSlice(oid, vec))
+		return toAnySlice(getStringSlice(oid, vec))
 	case "sum":
 		return sumMethod(oid, vec)
 	case "rowid":
