@@ -764,8 +764,11 @@ func (c *objGetArg) getData(ctx context.Context) (res string, err error) {
 		return
 	}
 
-	dataMeta, _ := meta.DataMeta()
-	header := dataMeta.BlockHeader()
+	blocks, ok := meta.DataMeta()
+	if !ok {
+		return "", moerr.NewInfoNoCtx(fmt.Sprintf("failed to read meta, err: %v", err))
+	}
+	header := blocks.BlockHeader()
 	colCnt := header.ColumnCount()
 	rowCnt := header.Rows()
 	blkCnt := meta.DataMetaCount()
@@ -781,7 +784,6 @@ func (c *objGetArg) getData(ctx context.Context) (res string, err error) {
 		}
 	}
 
-	blocks, _ := meta.DataMeta()
 	idxs := make([]uint16, len(c.cols))
 	typs := make([]types.Type, len(c.cols))
 	colData := make([][]any, len(c.cols))
@@ -839,7 +841,7 @@ func (c *objGetArg) getData(ctx context.Context) (res string, err error) {
 
 		coldata := colData[i][left:right]
 
-		data := c.getDataFromVector(coldata, typs[i].Oid)
+		data := getVectorData(coldata, typs[i].Oid, c.target, c.method)
 		col := ColumnJson{
 			Index: idxs[i],
 			Type:  typs[i].String(),
@@ -861,122 +863,6 @@ func (c *objGetArg) getData(ctx context.Context) (res string, err error) {
 	res = string(data)
 
 	return
-}
-
-func (c *objGetArg) getDataFromVector(vec []any, oid types.T) []any {
-	switch oid {
-	case types.T_bool:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_bit:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_int8:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_int16:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_int32:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_int64:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_uint8:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_uint16:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_uint32:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_uint64:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_float32:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_float64:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_date:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_datetime:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_time:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_timestamp:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_enum:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_uuid:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_TS:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_Rowid:
-		return getVectorData(vec, oid, c.target, c.method)
-	case types.T_Blockid:
-		return getVectorData(vec, oid, c.target, c.method)
-	default:
-		return vec
-	}
-}
-
-func getSliceFromVector(v *vector.Vector) []any {
-	switch v.GetType().Oid {
-	case types.T_bool:
-		return toAnySlice(vector.MustFixedCol[bool](v))
-	case types.T_bit:
-		return toAnySlice(vector.MustFixedCol[uint64](v))
-	case types.T_int8:
-		return toAnySlice(vector.MustFixedCol[int8](v))
-	case types.T_int16:
-		return toAnySlice(vector.MustFixedCol[int16](v))
-	case types.T_int32:
-		return toAnySlice(vector.MustFixedCol[int32](v))
-	case types.T_int64:
-		return toAnySlice(vector.MustFixedCol[int64](v))
-	case types.T_uint8:
-		return toAnySlice(vector.MustFixedCol[uint8](v))
-	case types.T_uint16:
-		return toAnySlice(vector.MustFixedCol[uint16](v))
-	case types.T_uint32:
-		return toAnySlice(vector.MustFixedCol[uint32](v))
-	case types.T_uint64:
-		return toAnySlice(vector.MustFixedCol[uint64](v))
-	case types.T_float32:
-		return toAnySlice(vector.MustFixedCol[float32](v))
-	case types.T_float64:
-		return toAnySlice(vector.MustFixedCol[float64](v))
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
-		area := v.GetArea()
-		val := vector.MustFixedCol[types.Varlena](v)
-		data := make([][]byte, len(val))
-		for i := range val {
-			data[i] = val[i].GetByteSlice(area)
-		}
-		return toAnySlice(data)
-	case types.T_date:
-		return toAnySlice(vector.MustFixedCol[types.Date](v))
-	case types.T_datetime:
-		return toAnySlice(vector.MustFixedCol[types.Datetime](v))
-	case types.T_time:
-		return toAnySlice(vector.MustFixedCol[types.Time](v))
-	case types.T_timestamp:
-		return toAnySlice(vector.MustFixedCol[types.Timestamp](v))
-	case types.T_enum:
-		return toAnySlice(vector.MustFixedCol[types.Enum](v))
-	case types.T_uuid:
-		return toAnySlice(vector.MustFixedCol[types.Uuid](v))
-	case types.T_TS:
-		return toAnySlice(vector.MustFixedCol[types.TS](v))
-	case types.T_Rowid:
-		return toAnySlice(vector.MustFixedCol[types.Rowid](v))
-	case types.T_Blockid:
-		return toAnySlice(vector.MustFixedCol[types.Blockid](v))
-	case types.T_decimal64:
-		return toAnySlice(vector.MustFixedCol[types.Decimal64](v))
-	case types.T_decimal128:
-		return toAnySlice(vector.MustFixedCol[types.Decimal128](v))
-	case types.T_decimal256:
-		return toAnySlice(vector.MustFixedCol[types.Decimal256](v))
-	default:
-		return []any{fmt.Sprintf("unspported type: %s", v.GetType().String())}
-	}
 }
 
 func getString(oid types.T, v any) string {
