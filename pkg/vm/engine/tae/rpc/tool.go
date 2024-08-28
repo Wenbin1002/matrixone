@@ -532,7 +532,7 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 
 		cols := make([]ColumnJson, 0, colCnt)
 		addColumn := func(idx uint16) {
-			col := data.MustGetColumn(idx)
+			col := blk.ColumnMeta(idx)
 			cols = append(cols, ColumnJson{
 				Index:       idx,
 				DataSize:    formatBytes(col.Location().Length()),
@@ -559,14 +559,17 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 	header := data.BlockHeader()
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	colCnt := header.ColumnCount()
-	cols := make([]ColumnJson, colCnt)
+	cols := make([]ColumnJson, 0, colCnt)
 	for i := range colCnt {
-		col := data.MustGetColumn(i)
-		cols[i] = ColumnJson{
-			Index:       i,
-			DataSize:    formatBytes(col.Location().Length()),
-			OriDataSize: formatBytes(col.Location().OriginSize()),
-			Zonemap:     col.ZoneMap().String(),
+		if c.col == invalidId || c.col == int(i) {
+			col := data.MustGetColumn(i)
+			cols = append(cols, ColumnJson{
+				Index:       i,
+				Type:        types.T(col.DataType()).String(),
+				DataSize:    formatBytes(col.Location().Length()),
+				OriDataSize: formatBytes(col.Location().OriginSize()),
+				Zonemap:     col.ZoneMap().String(),
+			})
 		}
 	}
 
@@ -597,16 +600,18 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 }
 
 type objGetArg struct {
-	ctx         *inspectContext
-	dir         string
-	name        string
-	id          int
-	cols, rows  []int
-	col, row    string
-	fs          fileservice.FileService
-	reader      *objectio.ObjectReader
-	res, target string
-	local       bool
+	ctx        *inspectContext
+	dir        string
+	name       string
+	id         int
+	cols, rows []int
+	col, row   string
+	fs         fileservice.FileService
+	reader     *objectio.ObjectReader
+	res        string
+	target     string
+	method     string
+	local      bool
 }
 
 func (c *objGetArg) PrepareCommand() *cobra.Command {
@@ -624,6 +629,7 @@ func (c *objGetArg) PrepareCommand() *cobra.Command {
 	getCmd.Flags().StringP("col", "c", "", "col")
 	getCmd.Flags().StringP("row", "r", "", "row")
 	getCmd.Flags().StringP("find", "f", "", "find")
+	getCmd.Flags().StringP("method", "m", "", "method")
 	getCmd.Flags().BoolP("local", "", false, "local")
 
 	return getCmd
@@ -635,6 +641,7 @@ func (c *objGetArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.row, _ = cmd.Flags().GetString("row")
 	c.local, _ = cmd.Flags().GetBool("local")
 	c.target, _ = cmd.Flags().GetString("find")
+	c.method, _ = cmd.Flags().GetString("method")
 	path, _ := cmd.Flags().GetString("name")
 	c.dir, c.name = filepath.Split(path)
 	if cmd.Flag("ictx") != nil {
@@ -824,6 +831,7 @@ func (c *objGetArg) getData(ctx context.Context) (res string, err error) {
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	o := BlockJson{
 		Index:   blk.GetID(),
+		Rows:    blk.GetRows(),
 		Cols:    blk.GetColumnCount(),
 		Columns: cols,
 	}
@@ -841,275 +849,56 @@ func (c *objGetArg) getDataFromVector(v *vector.Vector) []any {
 	switch v.GetType().Oid {
 
 	case types.T_bool:
-		vec := vector.MustFixedCol[bool](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[bool](v, c.target, c.method)
 	case types.T_bit:
-		vec := vector.MustFixedCol[uint64](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[uint64](v, c.target, c.method)
 	case types.T_int8:
-		vec := vector.MustFixedCol[int8](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[int8](v, c.target, c.method)
 	case types.T_int16:
-		vec := vector.MustFixedCol[int16](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[int16](v, c.target, c.method)
 	case types.T_int32:
-		vec := vector.MustFixedCol[int32](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[int32](v, c.target, c.method)
 	case types.T_int64:
-		vec := vector.MustFixedCol[int64](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[int64](v, c.target, c.method)
 	case types.T_uint8:
-		vec := vector.MustFixedCol[uint8](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[uint8](v, c.target, c.method)
 	case types.T_uint16:
-		vec := vector.MustFixedCol[uint16](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[uint16](v, c.target, c.method)
 	case types.T_uint32:
-		vec := vector.MustFixedCol[uint32](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[uint32](v, c.target, c.method)
 	case types.T_uint64:
-		vec := vector.MustFixedCol[uint64](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[uint64](v, c.target, c.method)
 	case types.T_float32:
-		vec := vector.MustFixedCol[float32](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[float32](v, c.target, c.method)
 	case types.T_float64:
-		vec := vector.MustFixedCol[float64](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
-	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
+		return getVectorData[float64](v, c.target, c.method)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		area := v.GetArea()
 		vec := vector.MustFixedCol[types.Varlena](v)
-		data := make([]any, len(vec))
-		for i := range data {
-			data[i] = vec[i].GetString(area)
-			if data[i] == c.target {
-				return []any{fmt.Sprintf("idx %v, value %v", i, data[i])}
-			}
+		data := make([][]byte, len(vec))
+		for i := range vec {
+			data[i] = vec[i].GetByteSlice(area)
 		}
 		if c.target != "" {
+			for i, val := range vec {
+				if val.GetString(area) == c.target {
+					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
+				}
+			}
 			return nil
 		}
-		return toAnySlice(data)
+		return executeMethod(v.GetType().Oid, toAnySlice(data), c.method)
 	case types.T_date:
-		vec := vector.MustFixedCol[types.Date](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[types.Date](v, c.target, c.method)
 	case types.T_datetime:
-		vec := vector.MustFixedCol[types.Datetime](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[types.Datetime](v, c.target, c.method)
 	case types.T_time:
-		vec := vector.MustFixedCol[types.Time](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[types.Time](v, c.target, c.method)
 	case types.T_timestamp:
-		vec := vector.MustFixedCol[types.Timestamp](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[types.Timestamp](v, c.target, c.method)
 	case types.T_enum:
-		vec := vector.MustFixedCol[types.Enum](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[types.Enum](v, c.target, c.method)
 	case types.T_decimal64:
 		if c.target != "" {
 			return nil
@@ -1121,72 +910,19 @@ func (c *objGetArg) getDataFromVector(v *vector.Vector) []any {
 		}
 		return toAnySlice(vector.MustFixedCol[types.Decimal128](v))
 	case types.T_uuid:
-		vec := vector.MustFixedCol[types.Uuid](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[types.Uuid](v, c.target, c.method)
 	case types.T_TS:
-		vec := vector.MustFixedCol[types.TS](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[types.TS](v, c.target, c.method)
 	case types.T_Rowid:
-		vec := vector.MustFixedCol[types.Rowid](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[types.Rowid](v, c.target, c.method)
 	case types.T_Blockid:
-		vec := vector.MustFixedCol[types.Blockid](v)
-		if c.target != "" {
-			for i, val := range vec {
-				if getString(v.GetType().Oid, val) == c.target {
-					return []any{fmt.Sprintf("idx %v, value %v", i, val)}
-				}
-			}
-			return nil
-		}
-		data := make([]string, len(vec))
-		for i := range data {
-			data[i] = getString(v.GetType().Oid, vec[i])
-		}
-		return toAnySlice(data)
+		return getVectorData[types.Blockid](v, c.target, c.method)
 	default:
-		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.GetType()))
+		return []any{v.String()}
 	}
-	return nil
 }
 
-func getString(oid types.T, v any) string {
+func toString(oid types.T, v any) string {
 	switch oid {
 	case types.T_bool:
 		val := v.(bool)
@@ -1214,9 +950,12 @@ func getString(oid types.T, v any) string {
 	case types.T_uint64:
 		return strconv.FormatUint(v.(uint64), 10)
 	case types.T_float32:
-		return strconv.FormatFloat(v.(float64), 'f', -1, 32)
+		return strconv.FormatFloat(float64(v.(float32)), 'f', -1, 32)
 	case types.T_float64:
 		return strconv.FormatFloat(v.(float64), 'f', -1, 64)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		return string(v.([]byte))
 	case types.T_date:
 		val := v.(types.Date)
 		return val.String()
@@ -1249,12 +988,144 @@ func getString(oid types.T, v any) string {
 	}
 }
 
+func toStringSlice(oid types.T, v []any) []string {
+	res := make([]string, len(v))
+	for i := range v {
+		res[i] = toString(oid, v[i])
+	}
+	return res
+}
+
+func getVectorData[T types.FixedSizeT](v *vector.Vector, target, method string) []any {
+	vec := vector.MustFixedCol[T](v)
+	if target != "" {
+		for i, val := range vec {
+			if toString(v.GetType().Oid, val) == target {
+				return []any{fmt.Sprintf("idx %v, value %v", i, val)}
+			}
+		}
+		return nil
+	}
+	return executeMethod(v.GetType().Oid, toAnySlice(vec), method)
+}
+
 func toAnySlice[T any](data []T) []any {
 	result := make([]any, len(data))
 	for i, v := range data {
 		result[i] = v
 	}
 	return result
+}
+
+func toTSlice[T any](data []any) []T {
+	result := make([]T, len(data))
+	for i, v := range data {
+		result[i] = v.(T)
+	}
+	return result
+}
+
+func executeMethod(oid types.T, vec []any, method string) []any {
+	switch method {
+	case "":
+		return toAnySlice(toStringSlice(oid, vec))
+	case "sum":
+		return sumMethod(oid, vec)
+	case "rowid":
+		return toRowid(oid, vec)
+	case "blkid":
+		return toBlkid(oid, vec)
+	case "location":
+		return toLocation(oid, vec)
+
+	default:
+		return []any{fmt.Sprintf("unknown method %v", method)}
+	}
+}
+
+type digitType interface {
+	int8 | int16 | int32 | int64 | uint8 | uint16 | uint32 | uint64 | float32 | float64
+}
+
+func sumMethod(oid types.T, vec []any) []any {
+	switch oid {
+	case types.T_bit:
+		return sum[uint64](toTSlice[uint64](vec))
+	case types.T_int8:
+		return sum[int8](toTSlice[int8](vec))
+	case types.T_int16:
+		return sum[int16](toTSlice[int16](vec))
+	case types.T_int32:
+		return sum[int32](toTSlice[int32](vec))
+	case types.T_int64:
+		return sum[int64](toTSlice[int64](vec))
+	case types.T_uint8:
+		return sum[uint8](toTSlice[uint8](vec))
+	case types.T_uint16:
+		return sum[uint16](toTSlice[uint16](vec))
+	case types.T_uint32:
+		return sum[uint32](toTSlice[uint32](vec))
+	case types.T_uint64:
+		return sum[uint64](toTSlice[uint64](vec))
+	case types.T_float32:
+		return sum[float32](toTSlice[float32](vec))
+	case types.T_float64:
+		return sum[float64](toTSlice[float64](vec))
+	default:
+		return []any{fmt.Sprintf("type %v not support sum method", oid.String())}
+	}
+}
+
+func sum[T digitType](vec []T) []any {
+	var res T
+	for _, v := range vec {
+		res += v
+	}
+	return []any{fmt.Sprintf("sum: %v", res)}
+}
+
+func toRowid(oid types.T, vec []any) []any {
+	switch oid {
+	case types.T_varchar:
+		res := make([]any, len(vec))
+		for i, v := range vec {
+			rowid := types.Rowid(v.([]byte))
+			res[i] = rowid.String()
+		}
+		return res
+	default:
+		return []any{fmt.Sprintf("type %v not support rowid method", oid.String())}
+	}
+
+}
+
+func toBlkid(oid types.T, vec []any) []any {
+	switch oid {
+	case types.T_varchar:
+		res := make([]any, len(vec))
+		for i, v := range vec {
+			blockid := types.Blockid(v.([]byte))
+			res[i] = blockid.String()
+		}
+		return res
+	default:
+		return []any{fmt.Sprintf("type %v not support blkid method", oid.String())}
+	}
+
+}
+
+func toLocation(oid types.T, vec []any) []any {
+	switch oid {
+	case types.T_varchar:
+		res := make([]any, len(vec))
+		for i, v := range vec {
+			res[i] = objectio.Location(v.([]byte)).String()
+		}
+		return res
+	default:
+		return []any{fmt.Sprintf("type %v not support location method", oid.String())}
+	}
+
 }
 
 type TableArg struct {
