@@ -417,6 +417,9 @@ func (c *moObjStatArg) Usage() (res string) {
 	res += "\n"
 	res += "  # Display information about object with local fs\n"
 	res += "  inspect object stat -n /your/path/obj-name --local\n"
+	res += "\n"
+	res += "  # Display information about object with input file\n"
+	res += "  inspect object stat --input /your/path/input.json\n"
 
 	res += "\n"
 	res += "Options:\n"
@@ -430,6 +433,16 @@ func (c *moObjStatArg) Usage() (res string) {
 	res += "    The level of detail of the information, should be 0(brief), 1(standard), 2(detailed)\n"
 	res += "  --local=false:\n"
 	res += "    If the file is downloaded from a standalone machine, you should use this flag\n"
+
+	res += "\n"
+	res += "Input Json Template:\n"
+	res += "{\n"
+	res += "  \"file_name\": \"/path/to/your/file\",\n"
+	res += "  \"block_id\": -1,\n"
+	res += "  \"level\": 0,\n"
+	res += "  \"columns\": [],\n"
+	res += "  \"local\": false,\n"
+	res += "}\n"
 
 	return
 }
@@ -777,6 +790,9 @@ func (c *objGetArg) Usage() (res string) {
 	res += "\n"
 	res += "  # Display the data of the specified row and column of the idxth block of this object\n"
 	res += "  inspect object get -n /your/path/obj-name -i idx -c \"1,2,4\" -r\"0,50\"\n"
+	res += "\n"
+	res += "  # Display the data with input file\n"
+	res += "  inspect object get --input /your/path/input.json\n"
 
 	res += "\n"
 	res += "Options:\n"
@@ -790,6 +806,27 @@ func (c *objGetArg) Usage() (res string) {
 	res += "    Specify the rows to display, should be \"left,right\", means [left,right)\n"
 	res += "  --local=false:\n"
 	res += "    If the file is downloaded from a standalone machine, you should use this flag\n"
+	res += "  -m, --method='':\n"
+	res += "    Specify the method to execute on the column\n"
+	res += "  -f, --find='':\n"
+	res += "    Specify the target to find in the column\n"
+	res += "  -a, --all=false:\n"
+	res += "    Display all rows\n"
+	res += "  --input='':\n"
+	res += "    Specify the input file\n"
+
+	res += "\n"
+	res += "Input Json Template:\n"
+	res += "{\n"
+	res += "  \"file_name\": \"/path/to/your/file\",\n"
+	res += "  \"block_id\": -1,\n"
+	res += "  \"columns\": [],\n"
+	res += "  \"rows\": [],\n"
+	res += "  \"target\": \"\",\n"
+	res += "  \"method\": \"\",\n"
+	res += "  \"local\": false,\n"
+	res += "  \"all\": false,\n"
+	res += "}\n"
 
 	return
 }
@@ -1521,10 +1558,15 @@ func (c *ckpStatArg) Usage() (res string) {
 	res += "Examples:\n"
 	res += "  # Display meta information for the latest checkpoints\n"
 	res += "  inspect checkpoint stat\n"
+	res += "\n"
 	res += "  # Display information for the given checkpoint\n"
 	res += "  inspect checkpoint stat -c ckp_end_ts\n"
+	res += "\n"
 	res += "  # [Offline] display latest checkpoints in the meta file\n"
 	res += "  inspect checkpoint stat -n /your/path/meta_file\n"
+	res += "\n"
+	res += "  # Display the checkpoints stat with input file\n"
+	res += "  inspect checkpoint stat --input /your/path/input.json\n"
 
 	res += "\n"
 	res += "Options:\n"
@@ -1538,6 +1580,17 @@ func (c *ckpStatArg) Usage() (res string) {
 	res += "    If you want to use this command offline, specify the file to be analyzed by this flag\n"
 	res += "  -a, --all=false:\n"
 	res += "    Show all tables\n"
+
+	res += "\n"
+	res += "Input Json Template:\n"
+	res += "{\n"
+	res += "  \"file_name\": \"/path/to/your/file\",\n"
+	res += "  \"ckp_end_ts\": \"\",\n"
+	res += "  \"table_id\": -1,\n"
+	res += "  \"limit\": 10000,\n"
+	res += "  \"all\": false,\n"
+	res += "  \"download\": false\n"
+	res += "}\n"
 
 	return
 }
@@ -1806,12 +1859,18 @@ func (c *ckpListArg) Usage() (res string) {
 	res += "Examples:\n"
 	res += "  # Display latest checkpoints in memory\n"
 	res += "  inspect checkpoint list\n"
+	res += "\n"
 	res += "  # Display all tables for the given checkpoint\n"
 	res += "  inspect checkpoint list -c ckp_end_ts\n"
+	res += "\n"
 	res += "  # Download latest checkpoints, the dir is mo-data/local/ckp\n"
 	res += "  inspect checkpoint list -d\n"
+	res += "\n"
 	res += "  # [Offline] display all checkpoints in the meta file\n"
 	res += "  inspect checkpoint list -n /your/path/meta_file\n"
+	res += "\n"
+	res += "  # Display the checkpoints with input file\n"
+	res += "  inspect checkpoint list --input /your/path/input.json\n"
 
 	res += "\n"
 	res += "Options:\n"
@@ -1825,6 +1884,19 @@ func (c *ckpListArg) Usage() (res string) {
 	res += "    Display all checkpoints \n"
 	res += "  -d, --download=false:\n"
 	res += "    Download latest checkpoints, the dir is mo-data/local/ckp \n"
+	res += "  --input=\"\":\n"
+	res += "    The input json file\n"
+
+	res += "\n"
+	res += "Input Json Template:\n"
+	res += "{\n"
+	res += "  \"file_name\": \"/path/to/your/file\",\n"
+	res += "  \"ckp_end_ts\": \"\",\n"
+	res += "  \"limit\": 10000,\n"
+	res += "  \"all\": false,\n"
+	res += "  \"download\": false\n"
+	res += "}\n"
+
 	return
 }
 
