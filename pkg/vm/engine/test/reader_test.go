@@ -142,7 +142,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 }
 
 func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
-	t.Skip("not finished")
+	//t.Skip("not finished")
 	var (
 		err          error
 		mp           *mpool.MPool
