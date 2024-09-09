@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -137,6 +138,7 @@ func FilterTxnObjects(
 
 	v2.TxnRangesFastPathLoadObjCntHistogram.Observe(float64(loadHit))
 	v2.TxnRangesFastPathSelectedBlockCntHistogram.Observe(float64(outBlocks.Len() - 1))
+	logutil.Infof("asdf fast path selected %d blocks", outBlocks.Len()-1)
 	if fastFilterTotal > 0 {
 		v2.TxnRangesFastPathObjSortKeyZMapSelectivityHistogram.Observe(float64(fastFilterHit) / float64(fastFilterTotal))
 	}
