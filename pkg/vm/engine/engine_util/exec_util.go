@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util"
 )
@@ -130,7 +129,7 @@ func FilterObjects(
 		}
 
 		if objStats.Rows() == 0 {
-			logutil.Errorf("object stats has zero rows: %s", objStats.String())
+			//logutil.Errorf("object stats has zero rows: %s", objStats.String())
 			util.EnableCoreDump()
 			util.CoreDump()
 		}
