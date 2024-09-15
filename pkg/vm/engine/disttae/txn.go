@@ -416,6 +416,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 
 	dumpAll := offset < 0
 	if dumpAll {
+		logutil.Infof("asdf")
 		offset = 0
 	}
 
