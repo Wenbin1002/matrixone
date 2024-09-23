@@ -436,6 +436,10 @@ func (db *txnDB) ApplyCommit() (err error) {
 }
 
 func (db *txnDB) Freeze() (err error) {
+	now := time.Now()
+	defer func() {
+		logutil.Infof("asdf Freeze %v", time.Since(now))
+	}()
 	for _, table := range db.tables {
 		if table.NeedRollback() {
 			if err = table.PrepareRollback(); err != nil {
@@ -461,6 +465,10 @@ func (db *txnDB) approxSize() int {
 }
 
 func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
+	start := time.Now()
+	defer func() {
+		logutil.Infof("asdf prepare %v", time.Since(start))
+	}()
 	for _, table := range db.tables {
 		if err = table.PrePreareTransfer(txnif.PrePreparePhase, table.store.rt.Now()); err != nil {
 			return

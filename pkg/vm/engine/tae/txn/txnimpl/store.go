@@ -83,6 +83,7 @@ func (tracer *txnTracer) Trigger(state uint8) {
 		if tracer.task != nil && tracer.state == 0 {
 			tracer.task.End()
 			v2.TxnPreparingWaitDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+			logutil.Infof("asdf TxnPreparingWaitDurationHistogram 1 %v", time.Since(tracer.stamp).Seconds())
 		}
 		_, tracer.task = trace.NewTask(context.Background(), "2-Preparing")
 		tracer.stamp = time.Now()
@@ -92,6 +93,8 @@ func (tracer *txnTracer) Trigger(state uint8) {
 		if tracer.task != nil && tracer.state == 1 {
 			tracer.task.End()
 			v2.TxnPreparingDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+
+			logutil.Infof("asdf TxnPreparingWaitDurationHistogram 2 %v", time.Since(tracer.stamp).Seconds())
 		}
 		_, tracer.task = trace.NewTask(context.Background(), "3-PrepareWalWait")
 		tracer.stamp = time.Now()
@@ -101,6 +104,8 @@ func (tracer *txnTracer) Trigger(state uint8) {
 		if tracer.task != nil && tracer.state == 2 {
 			tracer.task.End()
 			v2.TxnPrepareWalWaitDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+
+			logutil.Infof("asdf TxnPreparingWaitDurationHistogram 3 %v", time.Since(tracer.stamp).Seconds())
 		}
 		_, tracer.task = trace.NewTask(context.Background(), "4-PrepareWal")
 		tracer.stamp = time.Now()
@@ -110,6 +115,8 @@ func (tracer *txnTracer) Trigger(state uint8) {
 		if tracer.task != nil && tracer.state == 3 {
 			tracer.task.End()
 			v2.TxnPrepareWalDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+
+			logutil.Infof("asdf TxnPreparingWaitDurationHistogram 4 %v", time.Since(tracer.stamp).Seconds())
 		}
 		_, tracer.task = trace.NewTask(context.Background(), "5-PreparedWait")
 		tracer.stamp = time.Now()
@@ -119,6 +126,8 @@ func (tracer *txnTracer) Trigger(state uint8) {
 		if tracer.task != nil && tracer.state == 4 {
 			tracer.task.End()
 			v2.TxnPreparedWaitDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+
+			logutil.Infof("asdf TxnPreparingWaitDurationHistogram 5 %v", time.Since(tracer.stamp).Seconds())
 		}
 		_, tracer.task = trace.NewTask(context.Background(), "6-Prepared")
 		tracer.stamp = time.Now()

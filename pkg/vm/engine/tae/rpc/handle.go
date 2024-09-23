@@ -383,7 +383,9 @@ func (h *Handle) HandleCommit(
 
 	now := time.Now()
 	err = txn.Commit(ctx)
-	logutil.Infof("asdf txn commit latency: %v", time.Since(now))
+	if time.Since(now) > time.Second {
+		logutil.Infof("asdf txn commit latency: %v", time.Since(now))
+	}
 	cts = txn.GetCommitTS().ToTimestamp()
 	if cts.PhysicalTime == txnif.UncommitTS.Physical() {
 		panic("bad committs causing hung")
@@ -854,7 +856,7 @@ func (h *Handle) HandleWrite(
 				closeFunc()
 			}
 		}
-		logutil.Infof("asdf persisted rows: %d, %v", persistedCnt, req.TableName)
+		logutil.Infof("asdf persisted rows: %d, %v, %v", persistedCnt, req.TableName, txn.String())
 		return
 	}
 
@@ -895,7 +897,7 @@ func (h *Handle) HandleWrite(
 		}
 	}
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal)
-	logutil.Infof("asdf in memmory rows: %d, %v", inmemCnt, req.TableName)
+	logutil.Infof("asdf in memmory rows: %d, %v, %v", inmemCnt, req.TableName, txn.String())
 	return
 }
 
