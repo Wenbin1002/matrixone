@@ -813,8 +813,10 @@ func (h *Handle) HandleWrite(
 			vectors   []containers.Vector
 			closeFunc func()
 		)
-
+		persistedCnt := uint32(0)
+		defer logutil.Infof("asdf persisted rows: %d", persistedCnt)
 		for _, stats := range req.TombstoneStats {
+			persistedCnt += stats.Rows()
 			id := tb.GetMeta().(*catalog.TableEntry).AsCommonID()
 
 			if ok, err = tb.TryDeleteByStats(id, stats); err != nil {
@@ -854,10 +856,13 @@ func (h *Handle) HandleWrite(
 		return
 	}
 
+	inmemCnt := 0
+	defer logutil.Infof("asdf in memmory rows: %d", inmemCnt)
 	if len(req.Batch.Vecs) != 2 {
 		panic(fmt.Sprintf("req.Batch.Vecs length is %d, should be 2", len(req.Batch.Vecs)))
 	}
 	rowIDVec := containers.ToTNVector(req.Batch.GetVector(0), common.WorkspaceAllocator)
+	inmemCnt += rowIDVec.Length()
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later
