@@ -350,7 +350,7 @@ func (h *Handle) HandleCommit(
 		common.DoIfInfoEnabled(func() {
 			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
 				logutil.Warn(
-					"SLOW-LOG",
+					"asdf",
 					zap.Duration("commit-latency", time.Since(start)),
 					zap.String("txn", meta.DebugString()),
 				)
@@ -814,7 +814,6 @@ func (h *Handle) HandleWrite(
 			closeFunc func()
 		)
 		persistedCnt := uint32(0)
-		defer logutil.Infof("asdf persisted rows: %d", persistedCnt)
 		for _, stats := range req.TombstoneStats {
 			persistedCnt += stats.Rows()
 			id := tb.GetMeta().(*catalog.TableEntry).AsCommonID()
@@ -853,11 +852,11 @@ func (h *Handle) HandleWrite(
 				closeFunc()
 			}
 		}
+		logutil.Infof("asdf persisted rows: %d", persistedCnt)
 		return
 	}
 
 	inmemCnt := 0
-	defer logutil.Infof("asdf in memmory rows: %d", inmemCnt)
 	if len(req.Batch.Vecs) != 2 {
 		panic(fmt.Sprintf("req.Batch.Vecs length is %d, should be 2", len(req.Batch.Vecs)))
 	}
@@ -894,6 +893,7 @@ func (h *Handle) HandleWrite(
 		}
 	}
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal)
+	logutil.Infof("asdf in memmory rows: %d", inmemCnt)
 	return
 }
 
