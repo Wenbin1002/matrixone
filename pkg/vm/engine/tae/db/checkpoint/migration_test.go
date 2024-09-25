@@ -160,4 +160,7 @@ func Test_Migration(t *testing.T) {
 	for i := 0; i < bat.Length(); i++ {
 		readfn(i, ReadData)
 	}
+
+	res, err := datas[0].GetCheckpointMetaInfo(0, 1e9)
+	logutil.Infof("res: %v %v", res, err)
 }

@@ -45,6 +45,64 @@ const (
 	SnapshotAttr_SchemaExtra = "schema_extra"
 )
 
+const (
+	SystemDBAttr_ID          = "dat_id"
+	SystemDBAttr_Name        = "datname"
+	SystemDBAttr_CatalogName = "dat_catalog_name"
+	SystemDBAttr_CreateSQL   = "dat_createsql"
+	SystemDBAttr_Owner       = "owner"
+	SystemDBAttr_Creator     = "creator"
+	SystemDBAttr_CreateAt    = "created_time"
+	SystemDBAttr_AccID       = "account_id"
+	SystemDBAttr_Type        = "dat_type"
+
+	// 'mo_tables' table
+	SystemRelAttr_ID             = "rel_id"
+	SystemRelAttr_Name           = "relname"
+	SystemRelAttr_DBName         = "reldatabase"
+	SystemRelAttr_DBID           = "reldatabase_id"
+	SystemRelAttr_Persistence    = "relpersistence"
+	SystemRelAttr_Kind           = "relkind"
+	SystemRelAttr_Comment        = "rel_comment"
+	SystemRelAttr_CreateSQL      = "rel_createsql"
+	SystemRelAttr_CreateAt       = "created_time"
+	SystemRelAttr_Creator        = "creator"
+	SystemRelAttr_Owner          = "owner"
+	SystemRelAttr_AccID          = "account_id"
+	SystemRelAttr_Partitioned    = "partitioned"
+	SystemRelAttr_Partition      = "partition_info"
+	SystemRelAttr_ViewDef        = "viewdef"
+	SystemRelAttr_Constraint     = "constraint"
+	SystemRelAttr_Version        = "rel_version"
+	SystemRelAttr_CatalogVersion = "catalog_version"
+
+	// 'mo_columns' table
+	SystemColAttr_UniqName        = "att_uniq_name"
+	SystemColAttr_AccID           = "account_id"
+	SystemColAttr_Name            = "attname"
+	SystemColAttr_DBID            = "att_database_id"
+	SystemColAttr_DBName          = "att_database"
+	SystemColAttr_RelID           = "att_relname_id"
+	SystemColAttr_RelName         = "att_relname"
+	SystemColAttr_Type            = "atttyp"
+	SystemColAttr_Num             = "attnum"
+	SystemColAttr_Length          = "att_length"
+	SystemColAttr_NullAbility     = "attnotnull"
+	SystemColAttr_HasExpr         = "atthasdef"
+	SystemColAttr_DefaultExpr     = "att_default"
+	SystemColAttr_IsDropped       = "attisdropped"
+	SystemColAttr_ConstraintType  = "att_constraint_type"
+	SystemColAttr_IsUnsigned      = "att_is_unsigned"
+	SystemColAttr_IsAutoIncrement = "att_is_auto_increment"
+	SystemColAttr_Comment         = "att_comment"
+	SystemColAttr_IsHidden        = "att_is_hidden"
+	SystemColAttr_HasUpdate       = "attr_has_update"
+	SystemColAttr_Update          = "attr_update"
+	SystemColAttr_IsClusterBy     = "attr_is_clusterby"
+	SystemColAttr_Seqnum          = "attr_seqnum"
+	SystemColAttr_EnumValues      = "attr_enum"
+)
+
 var (
 	// for blk meta response
 	BlkMetaSchema      *catalog.Schema // latest version
@@ -67,6 +125,10 @@ var (
 	TBLSpecialDeleteSchema *catalog.Schema
 
 	StorageUsageSchemaV1 *catalog.Schema
+
+	SystemDBSchema     *catalog.Schema
+	SystemTableSchema  *catalog.Schema
+	SystemColumnSchema *catalog.Schema
 )
 
 var (
@@ -296,6 +358,124 @@ var (
 		types.New(types.T_uuid, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 	}
+
+	MoDatabaseSchema = []string{
+		SystemDBAttr_ID,
+		SystemDBAttr_Name,
+		SystemDBAttr_CatalogName,
+		SystemDBAttr_CreateSQL,
+		SystemDBAttr_Owner,
+		SystemDBAttr_Creator,
+		SystemDBAttr_CreateAt,
+		SystemDBAttr_AccID,
+		SystemDBAttr_Type,
+	}
+	MoTablesSchema = []string{
+		SystemRelAttr_ID,
+		SystemRelAttr_Name,
+		SystemRelAttr_DBName,
+		SystemRelAttr_DBID,
+		SystemRelAttr_Persistence,
+		SystemRelAttr_Kind,
+		SystemRelAttr_Comment,
+		SystemRelAttr_CreateSQL,
+		SystemRelAttr_CreateAt,
+		SystemRelAttr_Creator,
+		SystemRelAttr_Owner,
+		SystemRelAttr_AccID,
+		SystemRelAttr_Partitioned,
+		SystemRelAttr_Partition,
+		SystemRelAttr_ViewDef,
+		SystemRelAttr_Constraint,
+		SystemRelAttr_Version,
+		SystemRelAttr_CatalogVersion,
+	}
+	MoColumnsSchema = []string{
+		SystemColAttr_UniqName,
+		SystemColAttr_AccID,
+		SystemColAttr_DBID,
+		SystemColAttr_DBName,
+		SystemColAttr_RelID,
+		SystemColAttr_RelName,
+		SystemColAttr_Name,
+		SystemColAttr_Type,
+		SystemColAttr_Num,
+		SystemColAttr_Length,
+		SystemColAttr_NullAbility,
+		SystemColAttr_HasExpr,
+		SystemColAttr_DefaultExpr,
+		SystemColAttr_IsDropped,
+		SystemColAttr_ConstraintType,
+		SystemColAttr_IsUnsigned,
+		SystemColAttr_IsAutoIncrement,
+		SystemColAttr_Comment,
+		SystemColAttr_IsHidden,
+		SystemColAttr_HasUpdate,
+		SystemColAttr_Update,
+		SystemColAttr_IsClusterBy,
+		SystemColAttr_Seqnum,
+		SystemColAttr_EnumValues,
+	}
+
+	MoColumnsTypes = []types.Type{
+		types.New(types.T_varchar, 256, 0),                 // att_uniq_name
+		types.New(types.T_uint32, 0, 0),                    // account_id
+		types.New(types.T_uint64, 0, 0),                    // att_database_id
+		types.New(types.T_varchar, 256, 0),                 // att_database
+		types.New(types.T_uint64, 0, 0),                    // att_relname_id
+		types.New(types.T_varchar, 256, 0),                 // att_relname
+		types.New(types.T_varchar, 256, 0),                 // attname
+		types.New(types.T_varchar, 256, 0),                 // atttyp
+		types.New(types.T_int32, 0, 0),                     // attnum
+		types.New(types.T_int32, 0, 0),                     // att_length
+		types.New(types.T_int8, 0, 0),                      // attnotnull
+		types.New(types.T_int8, 0, 0),                      // atthasdef
+		types.New(types.T_varchar, 2048, 0),                // att_default
+		types.New(types.T_int8, 0, 0),                      // attisdropped
+		types.New(types.T_char, 1, 0),                      // att_constraint_type
+		types.New(types.T_int8, 0, 0),                      // att_is_unsigned
+		types.New(types.T_int8, 0, 0),                      // att_is_auto_increment
+		types.New(types.T_varchar, 2048, 0),                // att_comment
+		types.New(types.T_int8, 0, 0),                      // att_is_hidden
+		types.New(types.T_int8, 0, 0),                      // att_has_update
+		types.New(types.T_varchar, 2048, 0),                // att_update
+		types.New(types.T_int8, 0, 0),                      // att_is_clusterby
+		types.New(types.T_uint16, 0, 0),                    // att_seqnum
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // att_enum
+	}
+
+	MoTablesTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),     // rel_id
+		types.New(types.T_varchar, 5000, 0), // relname
+		types.New(types.T_varchar, 5000, 0), // reldatabase
+		types.New(types.T_uint64, 0, 0),     // reldatabase_id
+		types.New(types.T_varchar, 5000, 0), // relpersistence
+		types.New(types.T_varchar, 5000, 0), // relkind
+		types.New(types.T_varchar, 5000, 0), // rel_comment
+		types.New(types.T_text, 0, 0),       // rel_createsql
+		types.New(types.T_timestamp, 0, 0),  // created_time
+		types.New(types.T_uint32, 0, 0),     // creator
+		types.New(types.T_uint32, 0, 0),     // owner
+		types.New(types.T_uint32, 0, 0),     // account_id
+		types.New(types.T_int8, 0, 0),       // partitioned
+		types.New(types.T_blob, 0, 0),       // partition_info
+		types.New(types.T_varchar, 5000, 0), // viewdef
+		types.New(types.T_varchar, 5000, 0), // constraint
+		types.New(types.T_uint32, 0, 0),     // schema_version
+		types.New(types.T_uint32, 0, 0),     // schema_catalog_version
+	}
+
+	MoDatabaseTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),     // dat_id
+		types.New(types.T_varchar, 5000, 0), // datname
+		types.New(types.T_varchar, 5000, 0), // dat_catalog_name
+		types.New(types.T_varchar, 5000, 0), // dat_createsql
+		types.New(types.T_uint32, 0, 0),     // owner
+		types.New(types.T_uint32, 0, 0),     // creator
+		types.New(types.T_timestamp, 0, 0),  // created_time
+		types.New(types.T_uint32, 0, 0),     // account_id
+		types.New(types.T_varchar, 32, 0),   // dat_type
+	}
 )
 
 func init() {
@@ -433,7 +613,7 @@ func init() {
 	}
 
 	MetaSchemaV1 = catalog.NewEmptySchema("meta")
-	for i, colname := range MetaSchemaAttr {
+	for i, colname := range MetaSchemaAttrV1 {
 		if i == 0 {
 			if err := MetaSchemaV1.AppendPKCol(colname, MetaShcemaTypesV1[i], 0); err != nil {
 				panic(err)
@@ -486,7 +666,7 @@ func init() {
 	}
 
 	TNMetaSchemaV1 = catalog.NewEmptySchema("meta")
-	for i, colname := range TNMetaSchemaAttr {
+	for i, colname := range TNMetaSchemaAttrV1 {
 		if i == 0 {
 			if err := TNMetaSchemaV1.AppendPKCol(colname, TNMetaShcemaTypesV1[i], 0); err != nil {
 				panic(err)
@@ -499,7 +679,7 @@ func init() {
 	}
 
 	ObjectInfoSchemaV1 = catalog.NewEmptySchema("object_info")
-	for i, colname := range ObjectInfoAttr {
+	for i, colname := range ObjectInfoAttrV1 {
 		if i == 0 {
 			if err := ObjectInfoSchemaV1.AppendPKCol(colname, ObjectInfoTypesV1[i], 0); err != nil {
 				panic(err)
@@ -522,5 +702,54 @@ func init() {
 				panic(err)
 			}
 		}
+	}
+
+	var err error
+	SystemDBSchema = catalog.NewEmptySchema("mo_database")
+	for i, colname := range MoDatabaseSchema {
+		if i == 0 {
+			if err = SystemDBSchema.AppendPKCol(colname, MoDatabaseTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err = SystemDBSchema.AppendCol(colname, MoDatabaseTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+	if err = SystemDBSchema.Finalize(true); err != nil {
+		panic(err)
+	}
+
+	SystemTableSchema = catalog.NewEmptySchema("mo_tables")
+	for i, colname := range MoTablesSchema {
+		if i == 0 {
+			if err = SystemTableSchema.AppendPKCol(colname, MoTablesTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err = SystemTableSchema.AppendCol(colname, MoTablesTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+	if err = SystemTableSchema.Finalize(true); err != nil {
+		panic(err)
+	}
+
+	SystemColumnSchema = catalog.NewEmptySchema("mo_columns")
+	for i, colname := range MoColumnsSchema {
+		if i == 0 {
+			if err = SystemColumnSchema.AppendPKCol(colname, MoColumnsTypes[i], 0); err != nil {
+				panic(err)
+			}
+		} else {
+			if err = SystemColumnSchema.AppendCol(colname, MoColumnsTypes[i]); err != nil {
+				panic(err)
+			}
+		}
+	}
+	if err = SystemColumnSchema.Finalize(true); err != nil {
+		panic(err)
 	}
 }

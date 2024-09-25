@@ -3,6 +3,7 @@ package logtail
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -11,6 +12,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"sort"
+	"time"
 )
 
 const (
@@ -62,18 +65,20 @@ const MaxIDXV1 = StorageUsageDelIDXV1 + 1
 
 var checkpointDataSchemas_V11 [MaxIDXV1]*catalog.Schema
 
+var items [MaxIDXV1]*checkpointDataItem
+
 func init() {
 	checkpointDataSchemas_V11 = [MaxIDXV1]*catalog.Schema{
 		MetaSchemaV1,
-		catalog.SystemDBSchema,
+		SystemDBSchema,
 		TxnNodeSchema,
 		DBDelSchema, // 3
 		DBTNSchema,
-		catalog.SystemTableSchema,
+		SystemTableSchema,
 		TblTNSchema,
 		TblDelSchema, // 7
 		TblTNSchema,
-		catalog.SystemColumnSchema,
+		SystemColumnSchema,
 		ColumnDelSchema,
 		SegSchema, // 11
 		SegTNSchema,
@@ -94,6 +99,14 @@ func init() {
 		ObjectInfoSchemaV1,
 		StorageUsageSchemaV1,
 	}
+
+	for idx, schema := range checkpointDataSchemas_V11 {
+		items[idx] = &checkpointDataItem{
+			schema,
+			append(BaseTypes, schema.Types()...),
+			append(BaseAttr, schema.Attrs()...),
+		}
+	}
 }
 
 type blockIdx struct {
@@ -109,6 +122,10 @@ type CheckpointDataV1 struct {
 	allocator *mpool.MPool
 }
 
+func (data *CheckpointDataV1) Print() {
+	logutil.Infof("checkpoint data: %v", data.bats[24].Nameidx)
+}
+
 func NewCheckpointDataV1(
 	sid string,
 	mp *mpool.MPool,
@@ -120,9 +137,35 @@ func NewCheckpointDataV1(
 	}
 
 	for idx, schema := range checkpointDataSchemas_V11 {
-		data.bats[idx] = makeRespBatchFromSchema(schema, mp)
+		data.bats[idx] = makeRespBatchFromSchemaV1(schema, mp)
 	}
 	return data
+}
+
+func makeRespBatchFromSchemaV1(schema *catalog.Schema, mp *mpool.MPool) *containers.Batch {
+	bat := containers.NewBatch()
+
+	bat.AddVector(
+		"__mo_rowid",
+		containers.MakeVector(types.T_Rowid.ToType(), mp),
+	)
+	bat.AddVector(
+		"__mo_%1_commit_time",
+		containers.MakeVector(types.T_TS.ToType(), mp),
+	)
+	// Types() is not used, then empty schema can also be handled here
+	typs := schema.AllTypes()
+	attrs := schema.AllNames()
+	for i, attr := range attrs {
+		if attr == catalog.PhyAddrColumnName {
+			continue
+		}
+		bat.AddVector(
+			attr,
+			containers.MakeVector(typs[i], mp),
+		)
+	}
+	return bat
 }
 
 func (data *CheckpointDataV1) PrefetchFrom(
@@ -152,7 +195,7 @@ func (data *CheckpointDataV1) PrefetchFrom(
 			common.AnyField("location", blockIdxes[0].location.String()),
 			common.AnyField("size", checkpointSize))
 		for _, idx := range blockIdxes {
-			schema := checkpointDataReferVersions[version][idx.dataType]
+			schema := items[idx.dataType]
 			idxes := make([]uint16, len(schema.attrs))
 			for attr := range schema.attrs {
 				idxes[attr] = uint16(attr)
@@ -185,7 +228,8 @@ func (data *CheckpointDataV1) ReadTNMetaBatch(
 ) (err error) {
 	if data.bats[TNMetaIDXV1].Length() == 0 {
 		var bats []*containers.Batch
-		bats, err = LoadBlkColumnsByMeta(version, ctx, TNMetaShcemaTypesV1, TNMetaSchemaAttrV1, TNMetaIDXV1, reader, data.allocator)
+		item := items[TNMetaIDXV1]
+		bats, err = LoadBlkColumnsByMeta(version, ctx, item.types, item.attrs, TNMetaIDXV1, reader, data.allocator)
 		if err != nil {
 			return
 		}
@@ -201,36 +245,232 @@ func (data *CheckpointDataV1) ReadFrom(
 	reader *blockio.BlockReader,
 	fs fileservice.FileService,
 ) (err error) {
-	//err = data.readMetaBatch(ctx, version, reader, data.allocator)
-	//if err != nil {
-	//	return
-	//}
-	//err = data.readAll(ctx, version, fs)
-	//if err != nil {
-	//	return
-	//}
+	err = data.readMetaBatch(ctx, version, reader, data.allocator)
+	if err != nil {
+		return
+	}
+	err = data.readAll(ctx, version, fs)
+	if err != nil {
+		return
+	}
 
 	return
 }
 
-func prefetchCheckpointDataV1(
+func (data *CheckpointDataV1) readMetaBatch(
+	ctx context.Context,
+	version uint32,
+	reader *blockio.BlockReader,
+	_ *mpool.MPool,
+) (err error) {
+	if data.bats[MetaIDX].Length() == 0 {
+		var bats []*containers.Batch
+		item := items[MetaIDX]
+		if bats, err = LoadBlkColumnsByMeta(
+			version, ctx, item.types, item.attrs, uint16(0), reader, data.allocator,
+		); err != nil {
+			return
+		}
+		data.bats[MetaIDX] = bats[0]
+	}
+	return
+}
+
+func (data *CheckpointDataV1) readAll(
 	ctx context.Context,
 	version uint32,
 	service fileservice.FileService,
-	key objectio.Location,
 ) (err error) {
-	//var pref blockio.PrefetchParams
-	//pref, err = blockio.BuildPrefetchParams(service, key)
-	//if err != nil {
-	//	return
-	//}
-	//for idx, item := range checkpointDataReferVersions[version] {
-	//	idxes := make([]uint16, len(item.attrs))
-	//	for i := range item.attrs {
-	//		idxes[i] = uint16(i)
-	//	}
-	//	pref.AddBlock(idxes, []uint16{uint16(idx)})
-	//}
-	//return blockio.PrefetchWithMerged(pref)
-	return nil
+	data.replayMetaBatch(version)
+	checkpointDataSize := uint64(0)
+	readDuration := time.Now()
+	for _, val := range data.locations {
+		var reader *blockio.BlockReader
+		reader, err = blockio.NewObjectReader(data.sid, service, val)
+		if err != nil {
+			return
+		}
+		var bats []*containers.Batch
+		now := time.Now()
+		for idx, item := range items {
+			if uint16(idx) == MetaIDXV1 || uint16(idx) == TNMetaIDXV1 {
+				continue
+			}
+			if bats, err = LoadBlkColumnsByMeta(
+				version, ctx, item.types, item.attrs, uint16(idx), reader, data.allocator,
+			); err != nil {
+				return
+			}
+			for i := range bats {
+				data.bats[idx].Append(bats[i])
+				bats[i].Close()
+			}
+		}
+		logutil.Info("read-checkpoint", common.OperationField("read"),
+			common.OperandField("checkpoint"),
+			common.AnyField("location", val.String()),
+			common.AnyField("size", val.Extent().End()),
+			common.AnyField("read cost", time.Since(now)))
+		checkpointDataSize += uint64(val.Extent().End())
+	}
+	logutil.Info("read-all", common.OperationField("read"),
+		common.OperandField("checkpoint"),
+		common.AnyField("size", checkpointDataSize),
+		common.AnyField("duration", time.Since(readDuration)))
+	return
+}
+
+func (data *CheckpointDataV1) replayMetaBatch(version uint32) {
+	bat := data.bats[MetaIDXV1]
+	data.locations = make(map[string]objectio.Location)
+	tidVec := vector.MustFixedColWithTypeCheck[uint64](bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
+	insVec := bat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).GetDownstreamVector()
+	delVec := bat.GetVectorByName(SnapshotMetaAttr_BlockCNInsertBatchLocation).GetDownstreamVector()
+	delCNVec := bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation).GetDownstreamVector()
+	segVec := bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).GetDownstreamVector()
+
+	var usageInsVec, usageDelVec *vector.Vector
+	usageInsVec = bat.GetVectorByName(CheckpointMetaAttr_StorageUsageInsLocation).GetDownstreamVector()
+	usageDelVec = bat.GetVectorByName(CheckpointMetaAttr_StorageUsageDelLocation).GetDownstreamVector()
+	for i := 0; i < len(tidVec); i++ {
+		tid := tidVec[i]
+		if tid == 0 {
+			bl := BlockLocations(insVec.GetBytesAt(i))
+			it := bl.MakeIterator()
+			for it.HasNext() {
+				block := it.Next()
+				if !block.GetLocation().IsEmpty() {
+					data.locations[block.GetLocation().Name().String()] = block.GetLocation()
+				}
+			}
+			continue
+		}
+		insLocation := insVec.GetBytesAt(i)
+		delLocation := delVec.GetBytesAt(i)
+		delCNLocation := delCNVec.GetBytesAt(i)
+		segLocation := segVec.GetBytesAt(i)
+
+		tmp := [][]byte{insLocation, delLocation, delCNLocation, segLocation}
+		if usageInsVec != nil {
+			tmp = append(tmp, usageInsVec.GetBytesAt(i))
+			tmp = append(tmp, usageDelVec.GetBytesAt(i))
+		}
+
+		tableMeta := NewCheckpointMeta()
+		tableMeta.DecodeFromString(tmp)
+		data.meta[tid] = tableMeta
+	}
+
+	for _, meta := range data.meta {
+		for _, table := range meta.tables {
+			if table == nil {
+				continue
+			}
+
+			it := table.locations.MakeIterator()
+			for it.HasNext() {
+				block := it.Next()
+				if !block.GetLocation().IsEmpty() {
+					data.locations[block.GetLocation().Name().String()] = block.GetLocation()
+				}
+			}
+		}
+	}
+}
+
+func (data *CheckpointDataV1) GetCheckpointMetaInfo(id uint64, limit int) (res *ObjectInfoJson, err error) {
+	tombstone := make(map[string]struct{})
+	tombstoneInfo := make(map[uint64]*tableinfo)
+
+	insTableIDs := vector.MustFixedColWithTypeCheck[uint64](
+		data.bats[ObjectInfoIDXV1].GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
+	insDeleteTSs := vector.MustFixedColWithTypeCheck[types.TS](
+		data.bats[ObjectInfoIDXV1].GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
+	files := make(map[uint64]*tableinfo)
+	for i := range data.bats[ObjectInfoIDXV1].Length() {
+		if files[insTableIDs[i]] == nil {
+			files[insTableIDs[i]] = &tableinfo{
+				tid: insTableIDs[i],
+			}
+		}
+		deleteTs := insDeleteTSs[i]
+		if deleteTs.IsEmpty() {
+			files[insTableIDs[i]].add++
+		} else {
+			files[insTableIDs[i]].delete++
+		}
+	}
+
+	tableinfos := make([]*tableinfo, 0)
+	objectCount := uint64(0)
+	addCount := uint64(0)
+	deleteCount := uint64(0)
+	for _, count := range files {
+		tableinfos = append(tableinfos, count)
+		objectCount += count.add
+		addCount += count.add
+		objectCount += count.delete
+		deleteCount += count.delete
+	}
+	sort.Slice(tableinfos, func(i, j int) bool {
+		return tableinfos[i].add > tableinfos[j].add
+	})
+	tableJsons := make([]TableInfoJson, 0, data.bats[ObjectInfoIDXV1].Length())
+	tables := make(map[uint64]int)
+	for i := range len(tableinfos) {
+		tablejson := TableInfoJson{
+			ID:     tableinfos[i].tid,
+			Add:    tableinfos[i].add,
+			Delete: tableinfos[i].delete,
+		}
+		if id == 0 || tablejson.ID == id {
+			tables[tablejson.ID] = len(tableJsons)
+			tableJsons = append(tableJsons, tablejson)
+		}
+	}
+	tableinfos2 := make([]*tableinfo, 0)
+	objectCount2 := uint64(0)
+	addCount2 := uint64(0)
+	for _, count := range tombstoneInfo {
+		tableinfos2 = append(tableinfos2, count)
+		objectCount2 += count.add
+		addCount2 += count.add
+	}
+	sort.Slice(tableinfos2, func(i, j int) bool {
+		return tableinfos2[i].add > tableinfos2[j].add
+	})
+
+	for i := range len(tableinfos2) {
+		if idx, ok := tables[tableinfos2[i].tid]; ok {
+			tablejson := &tableJsons[idx]
+			tablejson.TombstoneRows = tableinfos2[i].add
+			tablejson.TombstoneCount = tableinfos2[i].delete
+			continue
+		}
+		tablejson := TableInfoJson{
+			ID:             tableinfos2[i].tid,
+			TombstoneRows:  tableinfos2[i].add,
+			TombstoneCount: tableinfos2[i].delete,
+		}
+		if id == 0 || tablejson.ID == id {
+			tableJsons = append(tableJsons, tablejson)
+		}
+	}
+
+	res = &ObjectInfoJson{
+		TableCnt:     len(tableJsons),
+		ObjectCnt:    objectCount,
+		ObjectAddCnt: addCount,
+		ObjectDelCnt: deleteCount,
+		TombstoneCnt: len(tombstone),
+	}
+
+	if id != invalid {
+		if limit < len(tableJsons) {
+			tableJsons = tableJsons[:limit]
+		}
+		res.Tables = tableJsons
+	}
+
+	return
 }
