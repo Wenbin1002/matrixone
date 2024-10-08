@@ -401,6 +401,8 @@ const (
 )
 
 func ReplayObjectBatch(objects, data *containers.Batch) {
+	objid := objects.GetVectorByName(catalog.PhyAddrColumnName)
+	commitTS := objects.GetVectorByName(objectio.DefaultCommitTS_Attr)
 	objectStats := objects.GetVectorByName(ObjectAttr_ObjectStats)
 	sortedVec := objects.GetVectorByName(ObjectAttr_Sorted)
 	appendableVec := objects.GetVectorByName(ObjectAttr_State)
@@ -427,6 +429,8 @@ func ReplayObjectBatch(objects, data *containers.Batch) {
 		}
 		obj = append(obj, reserved)
 
+		data.GetVectorByName(catalog.PhyAddrColumnName).Append(objid.Get(i), false)
+		data.GetVectorByName(objectio.DefaultCommitTS_Attr).Append(commitTS.Get(i), false)
 		data.GetVectorByName(ObjectAttr_ObjectStats).Append(obj, false)
 		data.GetVectorByName(SnapshotAttr_DBID).Append(dbidVec.Get(i), false)
 		data.GetVectorByName(SnapshotAttr_TID).Append(tidVec.Get(i), false)
