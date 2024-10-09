@@ -2,8 +2,10 @@ package db
 
 import (
 	"context"
+	"path/filepath"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -25,14 +27,15 @@ func NewFileFs(path string) fileservice.FileService {
 	return fs
 }
 
-func ListCkpFiles(fs fileservice.FileService) {
-	entires, err := fs.List(context.Background(), "ckp/")
+func ListCkpFiles(fs fileservice.FileService) (res []string) {
+	entires, err := fs.List(context.Background(), "ckp11/")
 	if err != nil {
 		panic(err)
 	}
 	for _, entry := range entires {
-		println(entry.Name)
+		res = append(res, filepath.Join("ckp11", entry.Name))
 	}
+	return
 }
 
 func ReadCkp11File(fs fileservice.FileService, filepath string) (*checkpoint.CheckpointEntry, []*containers.Batch) {
@@ -169,6 +172,170 @@ func ReadCkp11File(fs fileservice.FileService, filepath string) (*checkpoint.Che
 	return baseEntry, ckpData
 }
 
+func GetCkpFiles(ctx context.Context, fs fileservice.FileService, filepath string, sinker *engine_util.Sinker) {
+	reader, err := blockio.NewFileReader("", fs, filepath)
+	if err != nil {
+		panic(err)
+	}
+	mp := common.CheckpointAllocator
+	bats, closeCB, err := reader.LoadAllColumns(ctx, nil, mp)
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		if closeCB != nil {
+			closeCB()
+		}
+	}()
+
+	if len(bats) != 1 {
+		panic("invalid checkpoint file")
+	}
+
+	var checkpointVersion int = 3
+	bat := containers.NewBatch()
+	defer bat.Close()
+	{
+		// convert to TN Batch
+		colNames := checkpoint.CheckpointSchema.Attrs()
+		colTypes := checkpoint.CheckpointSchema.Types()
+		for i := range bats[0].Vecs {
+			var vec containers.Vector
+			if bats[0].Vecs[i].Length() == 0 {
+				vec = containers.MakeVector(colTypes[i], mp)
+			} else {
+				vec = containers.ToTNVector(bats[0].Vecs[i], mp)
+			}
+			bat.AddVector(colNames[i], vec)
+		}
+	}
+
+	entries, _ := checkpoint.ReplayCheckpointEntries(bat, checkpointVersion)
+	batch := makeBasicRespBatchFromSchema(ObjectListSchema, common.CheckpointAllocator, nil)
+
+	collectObjects := func(bats []*containers.Batch) {
+		collectStats := func(bat *containers.Batch) {
+			objectStats := bat.GetVectorByName(ObjectAttr_ObjectStats)
+
+			for i := 0; i < objectStats.Length(); i++ {
+				obj := objectStats.Get(i).([]byte)
+				obj = append(obj, byte(0))
+				batch.Vecs[0].Append(obj, false)
+			}
+		}
+
+		collectDeltaLoc := func(bat *containers.Batch) {
+			deltaLoc := bat.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc)
+
+			for i := 0; i < deltaLoc.Length(); i++ {
+				loc := objectio.DecodeLocation(deltaLoc.Get(i).([]byte))
+				batch.Vecs[0].Append(loc.ObjectId(), false)
+			}
+		}
+
+		collectStats(bats[ObjectInfoIDX])
+		collectStats(bats[TNObjectInfoIDX])
+		collectDeltaLoc(bats[BLKTNMetaDeleteTxnIDX])
+		collectDeltaLoc(bats[BLKMetaDeleteTxnIDX])
+	}
+
+	for _, entry := range entries {
+		data := GetCkpData(entry, fs)
+		if data == nil {
+			continue
+		}
+		collectObjects(data)
+	}
+
+	if err = sinker.Write(ctx, containers.ToCNBatch(batch)); err != nil {
+		panic(err)
+	}
+}
+
+func GetCkpData(baseEntry *checkpoint.CheckpointEntry, fs fileservice.FileService) (ckpData []*containers.Batch) {
+	ctx := context.Background()
+	mp := common.CheckpointAllocator
+	ckpData = make([]*containers.Batch, MaxIDX)
+	for idx, schema := range checkpointDataSchemas_V11 {
+		ckpData[idx] = makeRespBatchFromSchema(schema, mp)
+	}
+	reader1, err := blockio.NewObjectReader("", fs, baseEntry.GetTNLocation())
+	if err != nil {
+		panic(err)
+	}
+	// read meta
+	typs := append([]types.Type{types.T_Rowid.ToType(), types.T_TS.ToType()}, MetaSchema.Types()...)
+	attrs := append([]string{pkgcatalog.Row_ID, pkgcatalog.TableTailAttrCommitTs}, MetaSchema.Attrs()...)
+	metaBats, err := logtail.LoadBlkColumnsByMeta(11, ctx, typs, attrs, uint16(MetaIDX), reader1, mp)
+	if err != nil {
+		return nil
+	}
+	metaBat := metaBats[0]
+	ckpData[MetaIDX] = metaBat
+
+	locations := make(map[string]objectio.Location)
+	{ // read data locations
+		tidVec := vector.MustFixedColNoTypeCheck[uint64](metaBat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
+		insVec := metaBat.GetVectorByName(SnapshotMetaAttr_BlockInsertBatchLocation).GetDownstreamVector()
+		delVec := metaBat.GetVectorByName(SnapshotMetaAttr_BlockCNInsertBatchLocation).GetDownstreamVector()
+		delCNVec := metaBat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchLocation).GetDownstreamVector()
+		segVec := metaBat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchLocation).GetDownstreamVector()
+		usageInsVec := metaBat.GetVectorByName(CheckpointMetaAttr_StorageUsageInsLocation).GetDownstreamVector()
+		usageDelVec := metaBat.GetVectorByName(CheckpointMetaAttr_StorageUsageDelLocation).GetDownstreamVector()
+
+		insertLoc := func(loc []byte) {
+			bl := logtail.BlockLocations(loc)
+			it := bl.MakeIterator()
+			for it.HasNext() {
+				block := it.Next()
+				if !block.GetLocation().IsEmpty() {
+					locations[block.GetLocation().Name().String()] = block.GetLocation()
+				}
+			}
+		}
+
+		for i := 0; i < len(tidVec); i++ {
+			tid := tidVec[i]
+			if tid == 0 {
+				insertLoc(insVec.GetBytesAt(i))
+				continue
+			}
+			insLocation := insVec.GetBytesAt(i)
+			delLocation := delVec.GetBytesAt(i)
+			delCNLocation := delCNVec.GetBytesAt(i)
+			segLocation := segVec.GetBytesAt(i)
+			tmp := [][]byte{insLocation, delLocation, delCNLocation, segLocation}
+			tmp = append(tmp, usageInsVec.GetBytesAt(i))
+			tmp = append(tmp, usageDelVec.GetBytesAt(i))
+			for _, loc := range tmp {
+				insertLoc(loc)
+			}
+		}
+	}
+
+	// read data
+	for _, val := range locations {
+		reader, err := blockio.NewObjectReader("", fs, val)
+		if err != nil {
+			panic(err)
+		}
+
+		for idx := 1; idx < MaxIDX; idx++ {
+			typs := append([]types.Type{types.T_Rowid.ToType(), types.T_TS.ToType()}, checkpointDataSchemas_V11[idx].Types()...)
+			attrs := append([]string{pkgcatalog.Row_ID, pkgcatalog.TableTailAttrCommitTs}, checkpointDataSchemas_V11[idx].Attrs()...)
+			bats, err := logtail.LoadBlkColumnsByMeta(11, ctx, typs, attrs, uint16(idx), reader, mp)
+			if err != nil {
+				panic(err)
+			}
+			for i := range bats {
+				ckpData[idx].Append(bats[i])
+			}
+		}
+	}
+
+	return ckpData
+}
+
 func ReplayCatalogFromCkpData11(bats []*containers.Batch) *catalog.Catalog {
 	cata, _ := catalog.OpenCatalog(nil)
 	ReplayDB(cata, bats[DBInsertIDX], bats[DBInsertTxnIDX], bats[DBDeleteIDX], bats[DBDeleteTxnIDX])
@@ -289,6 +456,34 @@ func DumpCatalogToBatches(cata *catalog.Catalog) (bDbs, bTables, bCols *containe
 	return
 }
 
+func GetSinker(schema *catalog.Schema, fs fileservice.FileService) *engine_util.Sinker {
+	seqnums := make([]uint16, len(schema.Attrs()))
+	for i := range schema.Attrs() {
+		seqnums[i] = schema.GetSeqnum(schema.Attrs()[i])
+	}
+
+	factory := engine_util.NewFSinkerImplFactory(
+		seqnums,
+		schema.GetPrimaryKey().Idx,
+		true,
+		false,
+		schema.Version,
+	)
+
+	sinker := engine_util.NewSinker(
+		schema.GetPrimaryKey().Idx,
+		schema.Attrs(),
+		schema.Types(),
+		factory,
+		common.CheckpointAllocator,
+		fs,
+		engine_util.WithDedupAll(),
+		engine_util.WithTailSizeCap(0),
+		engine_util.WithBufferSizeCap(500*mpool.MB),
+	)
+	return sinker
+}
+
 func SinkBatch(schema *catalog.Schema, bat *containers.Batch, fs fileservice.FileService) []objectio.ObjectStats {
 	seqnums := make([]uint16, len(schema.Attrs()))
 	for i := range schema.Attrs() {
@@ -310,9 +505,9 @@ func SinkBatch(schema *catalog.Schema, bat *containers.Batch, fs fileservice.Fil
 		factory,
 		common.CheckpointAllocator,
 		fs,
-		engine_util.WithAllMergeSorted(),
 		engine_util.WithDedupAll(),
 		engine_util.WithTailSizeCap(0),
+		engine_util.WithBufferSizeCap(500*mpool.MB),
 	)
 	if err := sinker.Write(context.Background(), containers.ToCNBatch(bat)); err != nil {
 		panic(err)

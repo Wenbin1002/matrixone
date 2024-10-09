@@ -41,7 +41,7 @@ func WithAllMergeSorted() SinkerOption {
 
 func WithDedupAll() SinkerOption {
 	return func(sinker *Sinker) {
-		sinker.config.dedupAll = true
+		sinker.config.dedupOneFile = true
 	}
 }
 
@@ -317,7 +317,7 @@ type Sinker struct {
 	}
 	config struct {
 		allMergeSorted bool
-		dedupAll       bool
+		dedupOneFile   bool
 		bufferSizeCap  int
 		tailSizeCap    int
 	}
@@ -500,7 +500,7 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 	}
 
 	// 3. dedup
-	if sinker.config.dedupAll {
+	if sinker.config.dedupOneFile {
 		if err := containers.DedupSortedBatches(
 			sinker.schema.sortKeyIdx,
 			data,
@@ -600,7 +600,7 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 		if err := sinker.trySortInMemoryStaged(ctx); err != nil {
 			return err
 		}
-		if sinker.config.dedupAll {
+		if sinker.config.dedupOneFile {
 			if err := containers.DedupSortedBatches(
 				sinker.schema.sortKeyIdx,
 				sinker.staged.inMemory,
@@ -622,7 +622,7 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 		return nil
 	}
 
-	if !sinker.config.allMergeSorted && !sinker.config.dedupAll {
+	if !sinker.config.allMergeSorted {
 		sinker.result.persisted = append(sinker.result.persisted, sinker.staged.persisted...)
 		return nil
 	}

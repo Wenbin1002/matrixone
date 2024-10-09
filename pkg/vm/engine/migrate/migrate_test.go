@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -13,6 +14,22 @@ func TestXxx(t *testing.T) {
 	blockio.Start("")
 	defer blockio.Stop("")
 	fs := NewFileFs("/home/v/mo/matrixone/mo-data/shared")
+
+	// 0. ListCkpFiles
+	ctx := context.Background()
+	entries := ListCkpFiles(fs)
+	sinker := GetSinker(ObjectListSchema, fs)
+	defer sinker.Close()
+
+	for _, entry := range entries {
+		GetCkpFiles(ctx, fs, entry, sinker)
+	}
+	err := sinker.Sync(ctx)
+	if err != nil {
+		panic(err)
+	}
+	objlist, _ := sinker.GetResult()
+
 	// 1. ReadCkp11File
 	fromEntry, ckpbats := ReadCkp11File(fs, "ckp11/meta_0-0_1727659886661208596-1.ckp")
 	t.Log(fromEntry.String())
@@ -46,6 +63,9 @@ func TestXxx(t *testing.T) {
 		t.Log(v.String())
 	}
 	for _, v := range objCol {
+		t.Log(v.String())
+	}
+	for _, v := range objlist {
 		t.Log(v.String())
 	}
 }
