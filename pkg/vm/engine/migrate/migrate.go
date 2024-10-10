@@ -172,7 +172,7 @@ func ReadCkp11File(fs fileservice.FileService, filepath string) (*checkpoint.Che
 	return baseEntry, ckpData
 }
 
-func GetCkpFiles(ctx context.Context, fs fileservice.FileService, filepath string, sinker *engine_util.Sinker) {
+func DumpCkpFiles(ctx context.Context, fs fileservice.FileService, filepath string, sinker *engine_util.Sinker) {
 	reader, err := blockio.NewFileReader("", fs, filepath)
 	if err != nil {
 		panic(err)
@@ -456,7 +456,7 @@ func DumpCatalogToBatches(cata *catalog.Catalog) (bDbs, bTables, bCols *containe
 	return
 }
 
-func GetSinker(schema *catalog.Schema, fs fileservice.FileService) *engine_util.Sinker {
+func NewSinker(schema *catalog.Schema, fs fileservice.FileService) *engine_util.Sinker {
 	seqnums := make([]uint16, len(schema.Attrs()))
 	for i := range schema.Attrs() {
 		seqnums[i] = schema.GetSeqnum(schema.Attrs()[i])

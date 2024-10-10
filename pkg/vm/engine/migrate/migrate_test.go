@@ -18,11 +18,11 @@ func TestXxx(t *testing.T) {
 	// 0. ListCkpFiles
 	ctx := context.Background()
 	entries := ListCkpFiles(fs)
-	sinker := GetSinker(ObjectListSchema, fs)
+	sinker := NewSinker(ObjectListSchema, fs)
 	defer sinker.Close()
 
 	for _, entry := range entries {
-		GetCkpFiles(ctx, fs, entry, sinker)
+		DumpCkpFiles(ctx, fs, entry, sinker)
 	}
 	err := sinker.Sync(ctx)
 	if err != nil {
