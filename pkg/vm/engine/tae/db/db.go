@@ -208,6 +208,7 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 }
 
 func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS, lsn uint64, valid bool) {
+	return
 	if !valid {
 		logutil.Infof("checkpoint version is too small, LSN check is disable")
 	}
