@@ -17,6 +17,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"path"
 	"sync/atomic"
 	"time"
@@ -276,6 +277,18 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.GCManager.Start()
 
 	go TaeMetricsTask(ctx)
+
+	for i := 0; i < 2; i++ {
+		ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+		err1 := db.BGCheckpointRunner.ForceFlush(ts, ctx, 0)
+		time.Sleep(time.Second * 5)
+		err2 := db.BGCheckpointRunner.ForceGlobalCheckpointSynchronously(ctx, ts, 0)
+		time.Sleep(time.Second * 5)
+
+		fmt.Printf("global ckp %d, err1: %v, err2: %v\n", i, err1, err2)
+	}
+
+	logutil.Fatal("global checkpoint done")
 
 	// For debug or test
 	// logutil.Info(db.Catalog.SimplePPString(common.PPL2))
