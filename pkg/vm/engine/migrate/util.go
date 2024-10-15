@@ -2,15 +2,20 @@ package migrate
 
 import (
 	"context"
+	"path/filepath"
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -141,4 +146,68 @@ func NewS3Fs(ctx context.Context, name, endpoint, bucket, keyPrefix string) file
 		panic(err)
 	}
 	return fs
+}
+
+func GcCheckpointFiles(ctx context.Context, fs fileservice.FileService) {
+	mp := common.CheckpointAllocator
+	bf := bloomfilter.New(1000000, 0.01)
+	newObjs, err := fs.List(context.Background(), newObjDir)
+	if err != nil {
+		panic(err)
+	}
+	for _, obj := range newObjs {
+		reader, err := blockio.NewFileReader("", fs, filepath.Join(newObjDir, obj.Name))
+		if err != nil {
+			panic(err)
+		}
+		bats, closeCB, err := reader.LoadAllColumns(ctx, nil, mp)
+		if err != nil {
+			panic(err)
+		}
+		defer func() {
+			if closeCB != nil {
+				closeCB()
+			}
+		}()
+
+		for _, bat := range bats {
+			for _, vec := range bat.Vecs {
+				bf.Add(vec)
+			}
+		}
+	}
+
+	oldObjs, err := fs.List(context.Background(), oldObjDir)
+	if err != nil {
+		panic(err)
+	}
+	for _, obj := range oldObjs {
+		reader, err := blockio.NewFileReader("", fs, filepath.Join(oldObjDir, obj.Name))
+		if err != nil {
+			panic(err)
+		}
+		bats, closeCB, err := reader.LoadAllColumns(ctx, nil, mp)
+		if err != nil {
+			panic(err)
+		}
+		defer func() {
+			if closeCB != nil {
+				closeCB()
+			}
+		}()
+
+		for _, bat := range bats {
+			for _, vec := range bat.Vecs {
+				bf.TestAndAdd(vec, func(exist bool, i int) {
+					if !exist {
+						data := vec.GetBytesAt(i)
+						objid := objectio.ObjectId(data)
+						if err = fs.Delete(ctx, objid.String()); err != nil {
+							logutil.Infof("asdf delete %s failed", filepath.Join(oldObjDir, objid.String()))
+						}
+					}
+				})
+			}
+		}
+	}
 }

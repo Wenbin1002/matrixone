@@ -29,8 +29,12 @@ import (
 )
 
 const (
-	ckpDir     = "ckp"
-	ckpBackDir = "ckp-bak"
+	ckpDir    = "ckp"
+	ckpBakDir = "ckp-bak"
+	gcDir     = "gc"
+
+	oldObjDir = "rewritten/old"
+	newObjDir = "rewritten/new"
 )
 
 func NewFileFs(path string) fileservice.FileService {
@@ -39,12 +43,12 @@ func NewFileFs(path string) fileservice.FileService {
 }
 
 func ListCkpFiles(fs fileservice.FileService) (res []string) {
-	entires, err := fs.List(context.Background(), ckpBackDir)
+	entires, err := fs.List(context.Background(), ckpBakDir)
 	if err != nil {
 		panic(err)
 	}
 	for _, entry := range entires {
-		res = append(res, filepath.Join(ckpBackDir, entry.Name))
+		res = append(res, filepath.Join(ckpBakDir, entry.Name))
 	}
 	return
 }
@@ -555,6 +559,7 @@ func RewriteCkp(
 	txnMVCCNode *txnbase.TxnMVCCNode,
 	entryMVCCNode *catalog.EntryMVCCNode,
 	dbs, tbls, cols []objectio.ObjectStats,
+	tid uint64,
 ) {
 	start := time.Now()
 
@@ -602,7 +607,7 @@ func RewriteCkp(
 		oldCkpEntry.GetEnd(),
 		metaOffset, ckpData,
 		oldCkpBats[ObjectInfoIDX], oldCkpBats[TNObjectInfoIDX],
-		dataObjectBatch, sinker)
+		dataObjectBatch, tid, sinker)
 
 	if err := sinker.Sync(context.Background()); err != nil {
 		panic(err)
@@ -690,7 +695,8 @@ func getTableSchemaFromCatalog(dbId, tblId uint64, cc *catalog.Catalog) *catalog
 
 func replayObjectBatchHelper(
 	ts types.TS,
-	src, dest *containers.Batch, indexes []int,
+	src, dest *containers.Batch,
+	indexes []int, tid uint64,
 	sinker *engine_util.Sinker,
 ) {
 
@@ -736,6 +742,9 @@ func replayObjectBatchHelper(
 		dest.GetVectorByName(txnbase.SnapshotAttr_CommitTS).Append(commitTSVec.Get(idx), false)
 
 		objid := obj.ObjectLocation().ObjectId()
+		if tidVec.Get(idx).(uint64) == tid {
+			continue
+		}
 		bat.Vecs[0].Append(objid[:], false)
 
 		//fmt.Println("B", tidVec.Get(idx), obj.String())
@@ -752,6 +761,7 @@ func ReplayObjectBatch(
 	ckpData *logtail.CheckpointData,
 	srcObjInfoBat, srcTNObjInfoBat *containers.Batch,
 	dest *containers.Batch,
+	tid uint64,
 	sinker *engine_util.Sinker,
 ) int32 {
 
@@ -780,12 +790,12 @@ func ReplayObjectBatch(
 	gatherTablId(&tblIdx2, srcTNObjInfoBat)
 
 	for id, idxes2 := range tblIdx2 {
-		replayObjectBatchHelper(ts, srcTNObjInfoBat, dest, idxes2, sinker)
+		replayObjectBatchHelper(ts, srcTNObjInfoBat, dest, idxes2, tid, sinker)
 		ckpData.UpdateDataObjectMeta(id[1], metaOffset, metaOffset+int32(len(idxes2)))
 		metaOffset += int32(len(idxes2))
 
 		if idxes1 := tblIdx1[id]; len(idxes1) != 0 {
-			replayObjectBatchHelper(ts, srcObjInfoBat, dest, idxes1, sinker)
+			replayObjectBatchHelper(ts, srcObjInfoBat, dest, idxes1, tid, sinker)
 			ckpData.UpdateDataObjectMeta(id[1], metaOffset, metaOffset+int32(len(idxes1)))
 			metaOffset += int32(len(idxes1))
 
@@ -794,7 +804,7 @@ func ReplayObjectBatch(
 	}
 
 	for id, idxes := range tblIdx1 {
-		replayObjectBatchHelper(ts, srcObjInfoBat, dest, idxes, sinker)
+		replayObjectBatchHelper(ts, srcObjInfoBat, dest, idxes, tid, sinker)
 		ckpData.UpdateDataObjectMeta(id[1], metaOffset, metaOffset+int32(len(idxes)))
 		metaOffset += int32(len(idxes))
 	}

@@ -72,6 +72,7 @@ type replayArg struct {
 	arg       fsArg
 	cfg, meta string
 	rootDir   string
+	tid       uint64
 
 	objectList []objectio.ObjectStats
 }
@@ -85,6 +86,7 @@ func (c *replayArg) PrepareCommand() *cobra.Command {
 
 	replayCmd.Flags().StringP("cfg", "c", "", "config")
 	replayCmd.Flags().StringP("root", "r", "", "root")
+	replayCmd.Flags().Uint64P("tid", "t", 0, "tid")
 
 	return replayCmd
 }
@@ -98,6 +100,7 @@ func (c *replayArg) FromCommand(cmd *cobra.Command) (err error) {
 			panic(err)
 		}
 	}
+	c.tid, _ = cmd.Flags().GetUint64("tid")
 	return nil
 }
 
@@ -106,7 +109,6 @@ func (c *replayArg) String() string {
 }
 
 const (
-	dataDir   = "shared"
 	ckpDir    = "ckp"
 	ckpBakDir = "ckp-bak"
 	gcDir     = "gc"
@@ -152,8 +154,8 @@ func (c *replayArg) Run() error {
 	var dataFs, oldObjFS, newObjFS fileservice.FileService
 
 	ctx := context.Background()
-	if c.rootDir != "" {
-		dataFs = migrate.NewFileFs(path.Join(c.rootDir, dataDir))
+	if c.rootDir != "" { // just for local test
+		dataFs = migrate.NewFileFs(c.rootDir)
 		oldObjFS = migrate.NewFileFs(path.Join(c.rootDir, oldObjDir))
 		newObjFS = migrate.NewFileFs(path.Join(c.rootDir, newObjDir))
 	} else {
@@ -209,7 +211,7 @@ func (c *replayArg) Run() error {
 		CreatedAt: types.BuildTS(42424243, 0),
 	}
 
-	migrate.RewriteCkp(cata, dataFs, newObjFS, fromEntry, ckpbats, txnNode, entryNode, objDB, objTbl, objCol)
+	migrate.RewriteCkp(cata, dataFs, newObjFS, fromEntry, ckpbats, txnNode, entryNode, objDB, objTbl, objCol, c.tid)
 
 	for _, v := range objDB {
 		println(v.String())
@@ -237,6 +239,8 @@ func (c *replayArg) Run() error {
 }
 
 type gcArg struct {
+	rootDir string
+	arg     fsArg
 }
 
 func (c *gcArg) PrepareCommand() *cobra.Command {
@@ -246,10 +250,21 @@ func (c *gcArg) PrepareCommand() *cobra.Command {
 		Run:   RunFactory(c),
 	}
 
+	gcCmd.Flags().StringP("root", "r", "", "root")
+	gcCmd.Flags().StringP("input", "i", "", "input")
+
 	return gcCmd
 }
 
 func (c *gcArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.rootDir = cmd.Flag("root").Value.String()
+	cfg := cmd.Flag("input").Value.String()
+	if c.rootDir == "" {
+		c.arg, err = getFsArg(cfg)
+		if err != nil {
+			panic(err)
+		}
+	}
 	return nil
 }
 
@@ -258,6 +273,18 @@ func (c *gcArg) String() string {
 }
 
 func (c *gcArg) Run() error {
+	blockio.Start("")
+	defer blockio.Stop("")
+
+	ctx := context.Background()
+	var fs fileservice.FileService
+	if c.rootDir != "" { // just for local test
+		fs = migrate.NewFileFs(c.rootDir)
+	} else {
+		fs = migrate.NewS3Fs(ctx, c.arg.Name, c.arg.Endpoint, c.arg.Bucket, c.arg.KeyPrefix)
+	}
+
+	migrate.GcCheckpointFiles(ctx, fs)
 
 	return nil
 }
