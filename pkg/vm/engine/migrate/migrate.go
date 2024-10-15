@@ -1082,6 +1082,10 @@ func GcCheckpointFiles(ctx context.Context, fs fileservice.FileService) {
 			}
 		}
 	}
+
+	cleanDir(fs, rollbackDir)
+	cleanDir(fs, oldObjDir)
+	cleanDir(fs, newObjDir)
 }
 
 func Rollback(ctx context.Context, fs fileservice.FileService) {
