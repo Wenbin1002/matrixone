@@ -2,6 +2,9 @@ package migrate
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -25,10 +28,10 @@ func makeRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool) *container
 		pkgcatalog.TableTailAttrCommitTs,
 		containers.MakeVector(types.T_TS.ToType(), mp),
 	)
-	return makeBasicRespBatchFromSchema(schema, mp, bat)
+	return MakeBasicRespBatchFromSchema(schema, mp, bat)
 }
 
-func makeBasicRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool, base *containers.Batch) *containers.Batch {
+func MakeBasicRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool, base *containers.Batch) *containers.Batch {
 	var bat *containers.Batch
 	if base == nil {
 		bat = containers.NewBatch()
@@ -92,9 +95,7 @@ func WriteFile(fs fileservice.FileService, file string, data []byte) error {
 	return fs.Write(ctx, vec)
 }
 
-func BackupCkpDir(fs fileservice.FileService, dir string) {
-
-	ctx := context.Background()
+func BackupCkpDir(ctx context.Context, fs fileservice.FileService, dir string) {
 	bakdir := dir + "-bak"
 
 	{
@@ -141,4 +142,63 @@ func NewS3Fs(ctx context.Context, name, endpoint, bucket, keyPrefix string) file
 		panic(err)
 	}
 	return fs
+}
+
+func RollbackDir(ctx context.Context, fs fileservice.FileService, dir string) {
+	bakdir := dir + "-bak"
+
+	{
+		entries, _ := fs.List(context.Background(), dir)
+		for _, entry := range entries {
+			fs.Delete(ctx, dir+"/"+entry.Name)
+		}
+	}
+
+	entries, err := fs.List(ctx, bakdir)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir {
+			panic("bad ckp dir")
+		}
+	}
+	for i, entry := range entries {
+		data, err := ReadFile(fs, bakdir+"/"+entry.Name)
+		if err != nil {
+			panic(err)
+		}
+		if err := WriteFile(fs, dir+"/"+entry.Name, data); err != nil {
+			panic(err)
+		}
+		if i%5 == 0 {
+			logutil.Infof("rollback %d/%d %s", i, len(entries), entry.Name)
+		}
+	}
+}
+
+func cleanDir(fs fileservice.FileService, dir string) {
+	ctx := context.Background()
+	entries, _ := fs.List(ctx, dir)
+	for _, entry := range entries {
+		err := fs.Delete(ctx, dir+"/"+entry.Name)
+		if err != nil {
+			logutil.Infof("asdf delete %s/%s failed", dir, entry.Name)
+		}
+	}
+}
+
+func SinkObjectBatch(ctx context.Context, sinker *engine_util.Sinker, ss []objectio.ObjectStats) {
+	bat := MakeBasicRespBatchFromSchema(ObjectListSchema, common.CheckpointAllocator, nil)
+
+	for _, s := range ss {
+		objid := s.ObjectLocation().Name().String()
+		bat.Vecs[0].Append([]byte(objid), false)
+	}
+
+	err := sinker.Write(ctx, containers.ToCNBatch(bat))
+	if err != nil {
+		return
+	}
 }

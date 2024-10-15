@@ -75,7 +75,7 @@ func TestXxx(t *testing.T) {
 		CreatedAt: types.BuildTS(42424243, 0),
 	}
 
-	RewriteCkp(cata, dataFS, newObjFS, fromEntry, ckpbats, txnNode, entryNode, objDB, objTbl, objCol)
+	RewriteCkp(cata, dataFS, newObjFS, fromEntry, ckpbats, txnNode, entryNode, objDB, objTbl, objCol, 0)
 
 	for _, v := range objDB {
 		t.Log(v.String())
@@ -94,19 +94,18 @@ func TestXxx(t *testing.T) {
 		fromEntry.GetStart(),
 		fromEntry.GetEnd(),
 	)
-	_, err = snapshotMeta.SaveTableInfo(gc.GCMetaDir+name, dataFs)
+	_, err = snapshotMeta.SaveTableInfo(gc.GCMetaDir+name, dataFS)
 	if err != nil {
 		println(err.Error())
 	}
 }
 
-//func TestBackCkp(t *testing.T) {
-//	blockio.Start("")
-//	defer blockio.Stop("")
-//	fs := NewFileFs("/root/matrixone/mo-data/shared")
-//
-//	BackupCkpDir(fs, "ckp")
-//}
+func TestBackCkp(t *testing.T) {
+	blockio.Start("")
+	defer blockio.Stop("")
+	fs := NewFileFs("/home/v/mo/matrixone/mo-data/ckp11")
+	fs.Delete(context.Background(), "")
+}
 
 func TestS3Fs(t *testing.T) {
 	ctx := context.Background()
