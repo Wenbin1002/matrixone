@@ -100,13 +100,12 @@ func TestXxx(t *testing.T) {
 	}
 }
 
-//func TestBackCkp(t *testing.T) {
-//	blockio.Start("")
-//	defer blockio.Stop("")
-//	fs := NewFileFs("/root/matrixone/mo-data/shared")
-//
-//	BackupCkpDir(fs, "ckp")
-//}
+func TestBackCkp(t *testing.T) {
+	blockio.Start("")
+	defer blockio.Stop("")
+	fs := NewFileFs("/home/v/mo/matrixone/mo-data/ckp11")
+	fs.Delete(context.Background(), "")
+}
 
 func TestS3Fs(t *testing.T) {
 	ctx := context.Background()

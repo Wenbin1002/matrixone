@@ -2,20 +2,18 @@ package migrate
 
 import (
 	"context"
-	"path/filepath"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -30,10 +28,10 @@ func makeRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool) *container
 		pkgcatalog.TableTailAttrCommitTs,
 		containers.MakeVector(types.T_TS.ToType(), mp),
 	)
-	return makeBasicRespBatchFromSchema(schema, mp, bat)
+	return MakeBasicRespBatchFromSchema(schema, mp, bat)
 }
 
-func makeBasicRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool, base *containers.Batch) *containers.Batch {
+func MakeBasicRespBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool, base *containers.Batch) *containers.Batch {
 	var bat *containers.Batch
 	if base == nil {
 		bat = containers.NewBatch()
@@ -97,9 +95,7 @@ func WriteFile(fs fileservice.FileService, file string, data []byte) error {
 	return fs.Write(ctx, vec)
 }
 
-func BackupCkpDir(fs fileservice.FileService, dir string) {
-
-	ctx := context.Background()
+func BackupCkpDir(ctx context.Context, fs fileservice.FileService, dir string) {
 	bakdir := dir + "-bak"
 
 	{
@@ -148,66 +144,61 @@ func NewS3Fs(ctx context.Context, name, endpoint, bucket, keyPrefix string) file
 	return fs
 }
 
-func GcCheckpointFiles(ctx context.Context, fs fileservice.FileService) {
-	mp := common.CheckpointAllocator
-	bf := bloomfilter.New(1000000, 0.01)
-	newObjs, err := fs.List(context.Background(), newObjDir)
+func RollbackDir(ctx context.Context, fs fileservice.FileService, dir string) {
+	bakdir := dir + "-bak"
+
+	{
+		entries, _ := fs.List(context.Background(), dir)
+		for _, entry := range entries {
+			fs.Delete(ctx, dir+"/"+entry.Name)
+		}
+	}
+
+	entries, err := fs.List(ctx, bakdir)
 	if err != nil {
 		panic(err)
 	}
-	for _, obj := range newObjs {
-		reader, err := blockio.NewFileReader("", fs, filepath.Join(newObjDir, obj.Name))
-		if err != nil {
-			panic(err)
-		}
-		bats, closeCB, err := reader.LoadAllColumns(ctx, nil, mp)
-		if err != nil {
-			panic(err)
-		}
-		defer func() {
-			if closeCB != nil {
-				closeCB()
-			}
-		}()
 
-		for _, bat := range bats {
-			for _, vec := range bat.Vecs {
-				bf.Add(vec)
-			}
+	for _, entry := range entries {
+		if entry.IsDir {
+			panic("bad ckp dir")
 		}
 	}
+	for i, entry := range entries {
+		data, err := ReadFile(fs, bakdir+"/"+entry.Name)
+		if err != nil {
+			panic(err)
+		}
+		if err := WriteFile(fs, dir+"/"+entry.Name, data); err != nil {
+			panic(err)
+		}
+		if i%5 == 0 {
+			logutil.Infof("rollback %d/%d %s", i, len(entries), entry.Name)
+		}
+	}
+}
 
-	oldObjs, err := fs.List(context.Background(), oldObjDir)
+func cleanDir(fs fileservice.FileService, dir string) {
+	ctx := context.Background()
+	entries, _ := fs.List(ctx, dir)
+	for _, entry := range entries {
+		err := fs.Delete(ctx, dir+"/"+entry.Name)
+		if err != nil {
+			logutil.Infof("asdf delete %s/%s failed", dir, entry.Name)
+		}
+	}
+}
+
+func SinkObjectBatch(ctx context.Context, sinker *engine_util.Sinker, ss []objectio.ObjectStats) {
+	bat := MakeBasicRespBatchFromSchema(ObjectListSchema, common.CheckpointAllocator, nil)
+
+	for _, s := range ss {
+		objid := s.ObjectLocation().Name().String()
+		bat.Vecs[0].Append([]byte(objid), false)
+	}
+
+	err := sinker.Write(ctx, containers.ToCNBatch(bat))
 	if err != nil {
-		panic(err)
-	}
-	for _, obj := range oldObjs {
-		reader, err := blockio.NewFileReader("", fs, filepath.Join(oldObjDir, obj.Name))
-		if err != nil {
-			panic(err)
-		}
-		bats, closeCB, err := reader.LoadAllColumns(ctx, nil, mp)
-		if err != nil {
-			panic(err)
-		}
-		defer func() {
-			if closeCB != nil {
-				closeCB()
-			}
-		}()
-
-		for _, bat := range bats {
-			for _, vec := range bat.Vecs {
-				bf.TestAndAdd(vec, func(exist bool, i int) {
-					if !exist {
-						data := vec.GetBytesAt(i)
-						objid := objectio.ObjectId(data)
-						if err = fs.Delete(ctx, objid.String()); err != nil {
-							logutil.Infof("asdf delete %s failed", filepath.Join(oldObjDir, objid.String()))
-						}
-					}
-				})
-			}
-		}
+		return
 	}
 }

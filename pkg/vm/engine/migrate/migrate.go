@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,17 +34,18 @@ const (
 	ckpBakDir = "ckp-bak"
 	gcDir     = "gc"
 
-	oldObjDir = "rewritten/old"
-	newObjDir = "rewritten/new"
+	oldObjDir   = "rewritten/old"
+	newObjDir   = "rewritten/new"
+	rollbackDir = "rewritten/rollback"
 )
 
-func NewFileFs(path string) fileservice.FileService {
-	fs := objectio.TmpNewFileservice(context.Background(), path)
+func NewFileFs(ctx context.Context, path string) fileservice.FileService {
+	fs := objectio.TmpNewFileservice(ctx, path)
 	return fs
 }
 
-func ListCkpFiles(fs fileservice.FileService) (res []string) {
-	entires, err := fs.List(context.Background(), ckpBakDir)
+func ListCkpFiles(ctx context.Context, fs fileservice.FileService) (res []string) {
+	entires, err := fs.List(ctx, ckpBakDir)
 	if err != nil {
 		panic(err)
 	}
@@ -53,19 +55,17 @@ func ListCkpFiles(fs fileservice.FileService) (res []string) {
 	return
 }
 
-func GetCkpFiles(ctx context.Context, oldFs, newFs fileservice.FileService) (res []objectio.ObjectStats) {
-	entries := ListCkpFiles(oldFs)
-	sinker := NewSinker(ObjectListSchema, newFs)
+func GetCkpFiles(ctx context.Context, dataFs, objectFs fileservice.FileService) {
+	entries := ListCkpFiles(ctx, dataFs)
+	sinker := NewSinker(ObjectListSchema, objectFs)
 	defer sinker.Close()
 	for _, entry := range entries {
-		DumpCkpFiles(ctx, oldFs, entry, sinker)
+		DumpCkpFiles(ctx, dataFs, entry, sinker)
 	}
 	err := sinker.Sync(ctx)
 	if err != nil {
 		panic(err)
 	}
-	objlist, _ := sinker.GetResult()
-	return objlist
 }
 
 func DumpCkpFiles(ctx context.Context, fs fileservice.FileService, filepath string, sinker *engine_util.Sinker) {
@@ -104,7 +104,7 @@ func DumpCkpFiles(ctx context.Context, fs fileservice.FileService, filepath stri
 		}
 	}
 	entries, _ := checkpoint.ReplayCheckpointEntries(bat, checkpointVersion)
-	batch := makeBasicRespBatchFromSchema(ObjectListSchema, common.CheckpointAllocator, nil)
+	batch := MakeBasicRespBatchFromSchema(ObjectListSchema, common.CheckpointAllocator, nil)
 
 	collectObjects := func(bats []*containers.Batch) {
 		collectStats := func(bat *containers.Batch) {
@@ -113,8 +113,8 @@ func DumpCkpFiles(ctx context.Context, fs fileservice.FileService, filepath stri
 				obj := objectStats.Get(i).([]byte)
 				obj = append(obj, byte(0))
 				ss := objectio.ObjectStats(obj)
-				objid := ss.ObjectLocation().ObjectId()
-				batch.Vecs[0].Append(objid[:], false)
+				name := ss.ObjectLocation().Name().String()
+				batch.Vecs[0].Append([]byte(name), false)
 			}
 		}
 
@@ -125,8 +125,8 @@ func DumpCkpFiles(ctx context.Context, fs fileservice.FileService, filepath stri
 				if loc.IsEmpty() {
 					continue
 				}
-				objid := loc.ObjectId()
-				batch.Vecs[0].Append(objid[:], false)
+				name := loc.Name().String()
+				batch.Vecs[0].Append([]byte(name), false)
 			}
 		}
 
@@ -136,7 +136,7 @@ func DumpCkpFiles(ctx context.Context, fs fileservice.FileService, filepath stri
 		collectDeltaLoc(bats[BLKMetaInsertTxnIDX])
 	}
 	for _, entry := range entries {
-		data := GetCkpData(entry, fs)
+		data := GetCkpData(ctx, entry, fs)
 		if data == nil {
 			continue
 		}
@@ -147,8 +147,7 @@ func DumpCkpFiles(ctx context.Context, fs fileservice.FileService, filepath stri
 	}
 }
 
-func GetCkpData(baseEntry *checkpoint.CheckpointEntry, fs fileservice.FileService) (ckpData []*containers.Batch) {
-	ctx := context.Background()
+func GetCkpData(ctx context.Context, baseEntry *checkpoint.CheckpointEntry, fs fileservice.FileService) (ckpData []*containers.Batch) {
 	mp := common.CheckpointAllocator
 	ckpData = make([]*containers.Batch, MaxIDX)
 	for idx, schema := range checkpointDataSchemas_V11 {
@@ -251,8 +250,7 @@ func NewSinker(schema *catalog.Schema, fs fileservice.FileService) *engine_util.
 	return sinker
 }
 
-func ReadCkp11File(fs fileservice.FileService, filepath string) (*checkpoint.CheckpointEntry, []*containers.Batch) {
-	ctx := context.Background()
+func ReadCkp11File(ctx context.Context, fs fileservice.FileService, filepath string) (*checkpoint.CheckpointEntry, []*containers.Batch) {
 	reader, err := blockio.NewFileReader("", fs, filepath)
 	if err != nil {
 		panic(err)
@@ -453,9 +451,9 @@ func ReplayTable(cata *catalog.Catalog, ins, insTxn, insCol, del, delTxn *contai
 }
 
 func DumpCatalogToBatches(cata *catalog.Catalog) (bDbs, bTables, bCols *containers.Batch, snapshotMeta *logtail.SnapshotMeta) {
-	bDbs = makeBasicRespBatchFromSchema(catalog.SystemDBSchema, common.CheckpointAllocator, nil)
-	bTables = makeBasicRespBatchFromSchema(catalog.SystemTableSchema, common.CheckpointAllocator, nil)
-	bCols = makeBasicRespBatchFromSchema(catalog.SystemColumnSchema, common.CheckpointAllocator, nil)
+	bDbs = MakeBasicRespBatchFromSchema(catalog.SystemDBSchema, common.CheckpointAllocator, nil)
+	bTables = MakeBasicRespBatchFromSchema(catalog.SystemTableSchema, common.CheckpointAllocator, nil)
+	bCols = MakeBasicRespBatchFromSchema(catalog.SystemColumnSchema, common.CheckpointAllocator, nil)
 	visitor := &catalog.LoopProcessor{}
 	visitor.DatabaseFn = func(db *catalog.DBEntry) error {
 		if db.IsSystemDB() {
@@ -513,7 +511,7 @@ func DumpCatalogToBatches(cata *catalog.Catalog) (bDbs, bTables, bCols *containe
 	return
 }
 
-func SinkBatch(schema *catalog.Schema, bat *containers.Batch, fs fileservice.FileService) []objectio.ObjectStats {
+func SinkBatch(ctx context.Context, schema *catalog.Schema, bat *containers.Batch, fs fileservice.FileService) []objectio.ObjectStats {
 	seqnums := make([]uint16, len(schema.Attrs()))
 	for i := range schema.Attrs() {
 		seqnums[i] = schema.GetSeqnum(schema.Attrs()[i])
@@ -538,10 +536,10 @@ func SinkBatch(schema *catalog.Schema, bat *containers.Batch, fs fileservice.Fil
 		engine_util.WithDedupAll(),
 		engine_util.WithTailSizeCap(0),
 	)
-	if err := sinker.Write(context.Background(), containers.ToCNBatch(bat)); err != nil {
+	if err := sinker.Write(ctx, containers.ToCNBatch(bat)); err != nil {
 		panic(err)
 	}
-	if err := sinker.Sync(context.Background()); err != nil {
+	if err := sinker.Sync(ctx); err != nil {
 		panic(err)
 	}
 	objStats, mem := sinker.GetResult()
@@ -552,8 +550,9 @@ func SinkBatch(schema *catalog.Schema, bat *containers.Batch, fs fileservice.Fil
 }
 
 func RewriteCkp(
+	ctx context.Context,
 	cc *catalog.Catalog,
-	dataFS, objFS fileservice.FileService,
+	dataFS, objFS, rollbackFS fileservice.FileService,
 	oldCkpEntry *checkpoint.CheckpointEntry,
 	oldCkpBats []*containers.Batch,
 	txnMVCCNode *txnbase.TxnMVCCNode,
@@ -569,10 +568,12 @@ func RewriteCkp(
 
 	sinker := NewSinker(ObjectListSchema, objFS)
 	defer sinker.Close()
+	rollbackSinker := NewSinker(ObjectListSchema, rollbackFS)
+	defer rollbackSinker.Close()
 
 	metaOffset := int32(0)
 	fillObjStats := func(objs []objectio.ObjectStats, tid uint64) {
-		bat := makeBasicRespBatchFromSchema(ObjectListSchema, common.CheckpointAllocator, nil)
+		bat := MakeBasicRespBatchFromSchema(ObjectListSchema, common.CheckpointAllocator, nil)
 		for _, obj := range objs {
 			// padding rowid + committs
 			dataObjectBatch.GetVectorByName(catalog.PhyAddrColumnName).Append(objectio.HackObjid2Rowid(objectio.NewObjectid()), false)
@@ -583,13 +584,13 @@ func RewriteCkp(
 			dataObjectBatch.GetVectorByName(SnapshotAttr_DBID).Append(uint64(pkgcatalog.MO_CATALOG_ID), false)
 			dataObjectBatch.GetVectorByName(SnapshotAttr_TID).Append(tid, false)
 
-			objid := obj.ObjectLocation().ObjectId()
-			bat.Vecs[0].Append(objid[:], false)
+			objid := obj.ObjectLocation().Name().String()
+			bat.Vecs[0].Append([]byte(objid), false)
 
 			//fmt.Println("A", tid, obj.String())
 		}
 
-		if err := sinker.Write(context.Background(), containers.ToCNBatch(bat)); err != nil {
+		if err := sinker.Write(ctx, containers.ToCNBatch(bat)); err != nil {
 			panic(err)
 		}
 
@@ -604,34 +605,49 @@ func RewriteCkp(
 
 	// write object stats
 	metaOffset = ReplayObjectBatch(
+		ctx,
 		oldCkpEntry.GetEnd(),
 		metaOffset, ckpData,
 		oldCkpBats[ObjectInfoIDX], oldCkpBats[TNObjectInfoIDX],
 		dataObjectBatch, tid, sinker)
 
-	if err := sinker.Sync(context.Background()); err != nil {
+	if err := sinker.Sync(ctx); err != nil {
 		panic(err)
 	}
 
 	// write delta location
 	ReplayDeletes(
+		ctx,
 		ckpData,
 		cc,
 		oldCkpEntry.GetEnd(),
 		dataFS,
 		oldCkpBats[BLKMetaInsertIDX],
 		oldCkpBats[BLKMetaInsertTxnIDX],
-		tombstoneObjectBatch)
+		tombstoneObjectBatch,
+		rollbackSinker)
 
 	cnLocation, tnLocation, files, err := ckpData.WriteTo(dataFS, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize)
 	if err != nil {
+		panic(err)
+	}
+	bat := MakeBasicRespBatchFromSchema(ObjectListSchema, common.CheckpointAllocator, nil)
+
+	for _, file := range files {
+		bat.Vecs[0].Append([]byte(file), false)
+	}
+
+	if err = rollbackSinker.Write(ctx, containers.ToCNBatch(bat)); err != nil {
+		panic(err)
+	}
+	if err = rollbackSinker.Sync(ctx); err != nil {
 		panic(err)
 	}
 
 	oldCkpEntry.SetLocation(cnLocation, tnLocation) // update location
 	oldCkpEntry.SetVersion(logtail.CheckpointCurrentVersion)
 
-	newCkpMetaBat := makeBasicRespBatchFromSchema(checkpoint.CheckpointSchema, common.CheckpointAllocator, nil)
+	newCkpMetaBat := MakeBasicRespBatchFromSchema(checkpoint.CheckpointSchema, common.CheckpointAllocator, nil)
 	newCkpMetaBat.GetVectorByName(checkpoint.CheckpointAttr_StartTS).Append(oldCkpEntry.GetStart(), false)
 	newCkpMetaBat.GetVectorByName(checkpoint.CheckpointAttr_EndTS).Append(oldCkpEntry.GetEnd(), false)
 	newCkpMetaBat.GetVectorByName(checkpoint.CheckpointAttr_MetaLocation).Append([]byte(oldCkpEntry.GetLocation()), false)
@@ -651,7 +667,7 @@ func RewriteCkp(
 		panic(err)
 	}
 
-	_, err = writer.WriteEnd(context.Background())
+	_, err = writer.WriteEnd(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -694,6 +710,7 @@ func getTableSchemaFromCatalog(dbId, tblId uint64, cc *catalog.Catalog) *catalog
 }
 
 func replayObjectBatchHelper(
+	ctx context.Context,
 	ts types.TS,
 	src, dest *containers.Batch,
 	indexes []int, tid uint64,
@@ -711,7 +728,7 @@ func replayObjectBatchHelper(
 	prepareTSVec := src.GetVectorByName(txnbase.SnapshotAttr_PrepareTS)
 	commitTSVec := src.GetVectorByName(txnbase.SnapshotAttr_CommitTS)
 
-	bat := makeBasicRespBatchFromSchema(ObjectListSchema, common.CheckpointAllocator, nil)
+	bat := MakeBasicRespBatchFromSchema(ObjectListSchema, common.CheckpointAllocator, nil)
 
 	for _, idx := range indexes {
 		oldStatsBytes := objectStats.Get(idx).([]byte)
@@ -741,21 +758,23 @@ func replayObjectBatchHelper(
 		dest.GetVectorByName(txnbase.SnapshotAttr_PrepareTS).Append(prepareTSVec.Get(idx), false)
 		dest.GetVectorByName(txnbase.SnapshotAttr_CommitTS).Append(commitTSVec.Get(idx), false)
 
-		objid := obj.ObjectLocation().ObjectId()
 		if tidVec.Get(idx).(uint64) == tid {
 			continue
 		}
-		bat.Vecs[0].Append(objid[:], false)
+
+		name := obj.ObjectLocation().Name().String()
+		bat.Vecs[0].Append([]byte(name), false)
 
 		//fmt.Println("B", tidVec.Get(idx), obj.String())
 	}
 
-	if err := sinker.Write(context.Background(), containers.ToCNBatch(bat)); err != nil {
+	if err := sinker.Write(ctx, containers.ToCNBatch(bat)); err != nil {
 		panic(err)
 	}
 }
 
 func ReplayObjectBatch(
+	ctx context.Context,
 	ts types.TS,
 	metaOffset int32,
 	ckpData *logtail.CheckpointData,
@@ -790,12 +809,12 @@ func ReplayObjectBatch(
 	gatherTablId(&tblIdx2, srcTNObjInfoBat)
 
 	for id, idxes2 := range tblIdx2 {
-		replayObjectBatchHelper(ts, srcTNObjInfoBat, dest, idxes2, tid, sinker)
+		replayObjectBatchHelper(ctx, ts, srcTNObjInfoBat, dest, idxes2, tid, sinker)
 		ckpData.UpdateDataObjectMeta(id[1], metaOffset, metaOffset+int32(len(idxes2)))
 		metaOffset += int32(len(idxes2))
 
 		if idxes1 := tblIdx1[id]; len(idxes1) != 0 {
-			replayObjectBatchHelper(ts, srcObjInfoBat, dest, idxes1, tid, sinker)
+			replayObjectBatchHelper(ctx, ts, srcObjInfoBat, dest, idxes1, tid, sinker)
 			ckpData.UpdateDataObjectMeta(id[1], metaOffset, metaOffset+int32(len(idxes1)))
 			metaOffset += int32(len(idxes1))
 
@@ -804,7 +823,7 @@ func ReplayObjectBatch(
 	}
 
 	for id, idxes := range tblIdx1 {
-		replayObjectBatchHelper(ts, srcObjInfoBat, dest, idxes, tid, sinker)
+		replayObjectBatchHelper(ctx, ts, srcObjInfoBat, dest, idxes, tid, sinker)
 		ckpData.UpdateDataObjectMeta(id[1], metaOffset, metaOffset+int32(len(idxes)))
 		metaOffset += int32(len(idxes))
 	}
@@ -913,12 +932,14 @@ func replayDeletesHelper(
 }
 
 func ReplayDeletes(
+	ctx context.Context,
 	ckpData *logtail.CheckpointData,
 	cc *catalog.Catalog,
 	ts types.TS,
 	fs fileservice.FileService,
 	srcBat, srcTxnBat *containers.Batch,
-	destBat *containers.Batch) {
+	destBat *containers.Batch,
+	sinker *engine_util.Sinker) {
 
 	var (
 		err         error
@@ -928,10 +949,6 @@ func ReplayDeletes(
 
 	srcCNBat := containers.ToCNBatch(srcBat)
 	blkIdCol := vector.MustFixedColWithTypeCheck[types.Blockid](srcCNBat.Vecs[blkIdColIdx])
-
-	var (
-		ctx = context.Background()
-	)
 
 	//  BLKMetaInsertIDX
 	//  BLKMetaInsertTxnIDX
@@ -991,6 +1008,8 @@ func ReplayDeletes(
 			destBat.GetVectorByName(txnbase.SnapshotAttr_PrepareTS).Append(ts, false)
 		}
 
+		SinkObjectBatch(ctx, sinker, dd.statsList)
+
 		ckpData.UpdateTombstoneObjectMeta(dd.tblId, metaOffset, metaOffset+int32(len(dd.statsList)))
 		metaOffset += int32(len(dd.statsList))
 	}
@@ -999,4 +1018,106 @@ func ReplayDeletes(
 	pool.Free()
 
 	return
+}
+
+func GcCheckpointFiles(ctx context.Context, fs fileservice.FileService) {
+	mp := common.CheckpointAllocator
+	bf := bloomfilter.New(1000000, 0.01)
+	newObjs, err := fs.List(ctx, newObjDir)
+	if err != nil {
+		panic(err)
+	}
+	for _, obj := range newObjs {
+		reader, err := blockio.NewFileReader("", fs, filepath.Join(newObjDir, obj.Name))
+		if err != nil {
+			panic(err)
+		}
+		bats, closeCB, err := reader.LoadAllColumns(ctx, nil, mp)
+		if err != nil {
+			panic(err)
+		}
+		defer func() {
+			if closeCB != nil {
+				closeCB()
+			}
+		}()
+
+		for _, bat := range bats {
+			for _, vec := range bat.Vecs {
+				bf.Add(vec)
+			}
+		}
+	}
+
+	oldObjs, err := fs.List(ctx, oldObjDir)
+	if err != nil {
+		panic(err)
+	}
+	for _, obj := range oldObjs {
+		reader, err := blockio.NewFileReader("", fs, filepath.Join(oldObjDir, obj.Name))
+		if err != nil {
+			panic(err)
+		}
+		bats, closeCB, err := reader.LoadAllColumns(ctx, nil, mp)
+		if err != nil {
+			panic(err)
+		}
+		defer func() {
+			if closeCB != nil {
+				closeCB()
+			}
+		}()
+
+		for _, bat := range bats {
+			for _, vec := range bat.Vecs {
+				bf.TestAndAdd(vec, func(exist bool, i int) {
+					if !exist {
+						data := vec.GetBytesAt(i)
+						objid := string(data)
+						if err = fs.Delete(ctx, objid); err != nil {
+							logutil.Infof("asdf delete %s failed, err: %v", objid, err)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func Rollback(ctx context.Context, fs fileservice.FileService) {
+	mp := common.CheckpointAllocator
+	objs, err := fs.List(ctx, rollbackDir)
+	if err != nil {
+		panic(err)
+	}
+	for _, obj := range objs {
+		reader, err := blockio.NewFileReader("", fs, filepath.Join(rollbackDir, obj.Name))
+		if err != nil {
+			panic(err)
+		}
+		bats, closeCB, err := reader.LoadAllColumns(ctx, nil, mp)
+		if err != nil {
+			panic(err)
+		}
+		defer func() {
+			if closeCB != nil {
+				closeCB()
+			}
+		}()
+
+		for _, bat := range bats {
+			for i := range bat.Vecs[0].Length() {
+				name := bat.Vecs[0].GetBytesAt(i)
+				if err = fs.Delete(ctx, string(name)); err != nil {
+					logutil.Infof("asdf delete %s failed, err: %v", string(name), err)
+				}
+			}
+		}
+	}
+
+	RollbackDir(ctx, fs, ckpDir)
+	RollbackDir(ctx, fs, gcDir)
+	cleanDir(fs, rollbackDir)
+	cleanDir(fs, oldObjDir)
+	cleanDir(fs, newObjDir)
 }
