@@ -633,6 +633,7 @@ func RewriteCkp(
 	}
 
 	bat := MakeBasicRespBatchFromSchema(ObjectListSchema, common.CheckpointAllocator, nil)
+	bat.Vecs[0].Append([]byte(cnLocation.Name().String()), false)
 	for _, file := range files {
 		bat.Vecs[0].Append([]byte(file), false)
 	}
