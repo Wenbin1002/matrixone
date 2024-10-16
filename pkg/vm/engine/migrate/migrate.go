@@ -731,6 +731,10 @@ func replayObjectBatchHelper(
 	bat := MakeBasicRespBatchFromSchema(ObjectListSchema, common.CheckpointAllocator, nil)
 
 	for _, idx := range indexes {
+		if tidVec.Get(idx).(uint64) == tid {
+			continue
+		}
+
 		oldStatsBytes := objectStats.Get(idx).([]byte)
 		oldStatsBytes = append(oldStatsBytes, byte(0))
 		obj := objectio.ObjectStats(oldStatsBytes)
@@ -757,10 +761,6 @@ func replayObjectBatchHelper(
 		dest.GetVectorByName(txnbase.SnapshotAttr_StartTS).Append(startTSVec.Get(idx), false)
 		dest.GetVectorByName(txnbase.SnapshotAttr_PrepareTS).Append(prepareTSVec.Get(idx), false)
 		dest.GetVectorByName(txnbase.SnapshotAttr_CommitTS).Append(commitTSVec.Get(idx), false)
-
-		if tidVec.Get(idx).(uint64) == tid {
-			continue
-		}
 
 		name := obj.ObjectLocation().Name().String()
 		bat.Vecs[0].Append([]byte(name), false)
