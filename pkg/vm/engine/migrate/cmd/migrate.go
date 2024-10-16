@@ -35,6 +35,9 @@ func (c *migrateArg) PrepareCommand() *cobra.Command {
 	gc := gcArg{}
 	migrateCmd.AddCommand(gc.PrepareCommand())
 
+	rollback := rollbackArg{}
+	migrateCmd.AddCommand(rollback.PrepareCommand())
+
 	return migrateCmd
 }
 
@@ -307,8 +310,8 @@ type rollbackArg struct {
 
 func (c *rollbackArg) PrepareCommand() *cobra.Command {
 	gcCmd := &cobra.Command{
-		Use:   "gc",
-		Short: "gc checkpoint files",
+		Use:   "rollback",
+		Short: "rollback changes",
 		Run:   RunFactory(c),
 	}
 
