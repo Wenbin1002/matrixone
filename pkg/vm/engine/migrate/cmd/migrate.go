@@ -168,8 +168,6 @@ func (c *replayArg) Run() error {
 		rollbackFS = migrate.NewS3Fs(ctx, c.arg.Name, c.arg.Endpoint, c.arg.Bucket, path.Join(c.arg.KeyPrefix, rollbackDir))
 	}
 
-	rollbackSinker := migrate.NewSinker(migrate.ObjectListSchema, rollbackFS)
-
 	c.meta = getLatestCkpMeta(dataFS, ckpDir)
 
 	// 1. Backup ckp meta files
@@ -209,12 +207,18 @@ func (c *replayArg) Run() error {
 	objCol := migrate.SinkBatch(ctx, catalog.SystemColumnSchema, bCol, dataFS)
 
 	{
+		rollbackSinker := migrate.NewSinker(migrate.ObjectListSchema, rollbackFS)
+		defer rollbackSinker.Close()
 		var ss []objectio.ObjectStats
 		ss = append(ss, objDB...)
 		ss = append(ss, objTbl...)
 		ss = append(ss, objCol...)
 
 		migrate.SinkObjectBatch(ctx, rollbackSinker, ss)
+		if err := rollbackSinker.Sync(ctx); err != nil {
+			println(err.Error())
+			return err
+		}
 	}
 
 	// 8. Write 1.3 Global Ckp
