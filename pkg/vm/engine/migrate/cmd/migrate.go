@@ -215,10 +215,6 @@ func (c *replayArg) Run() error {
 		ss = append(ss, objCol...)
 
 		migrate.SinkObjectBatch(ctx, rollbackSinker, ss)
-		if err := rollbackSinker.Sync(ctx); err != nil {
-			println(err.Error())
-			return err
-		}
 	}
 
 	// 8. Write 1.3 Global Ckp

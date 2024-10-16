@@ -631,8 +631,8 @@ func RewriteCkp(
 	if err != nil {
 		panic(err)
 	}
-	bat := MakeBasicRespBatchFromSchema(ObjectListSchema, common.CheckpointAllocator, nil)
 
+	bat := MakeBasicRespBatchFromSchema(ObjectListSchema, common.CheckpointAllocator, nil)
 	for _, file := range files {
 		bat.Vecs[0].Append([]byte(file), false)
 	}

@@ -197,8 +197,10 @@ func SinkObjectBatch(ctx context.Context, sinker *engine_util.Sinker, ss []objec
 		bat.Vecs[0].Append([]byte(objid), false)
 	}
 
-	err := sinker.Write(ctx, containers.ToCNBatch(bat))
-	if err != nil {
-		return
+	if err := sinker.Write(ctx, containers.ToCNBatch(bat)); err != nil {
+		panic(err)
+	}
+	if err := sinker.Sync(ctx); err != nil {
+		panic(err)
 	}
 }
