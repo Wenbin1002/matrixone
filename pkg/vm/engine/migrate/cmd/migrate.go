@@ -38,6 +38,9 @@ func (c *migrateArg) PrepareCommand() *cobra.Command {
 	rollback := rollbackArg{}
 	migrateCmd.AddCommand(rollback.PrepareCommand())
 
+	test := testArg{}
+	migrateCmd.AddCommand(test.PrepareCommand())
+
 	return migrateCmd
 }
 
@@ -85,7 +88,7 @@ func (c *replayArg) PrepareCommand() *cobra.Command {
 		Run:   RunFactory(c),
 	}
 
-	replayCmd.Flags().StringP("cfg", "c", "", "config")
+	replayCmd.Flags().StringP("input", "i", "", "input")
 	replayCmd.Flags().StringP("root", "r", "", "root")
 	replayCmd.Flags().Uint64P("tid", "t", 0, "tid")
 
@@ -94,7 +97,7 @@ func (c *replayArg) PrepareCommand() *cobra.Command {
 
 func (c *replayArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.rootDir = cmd.Flag("root").Value.String()
-	cfg := cmd.Flag("cfg").Value.String()
+	cfg := cmd.Flag("input").Value.String()
 	if c.rootDir == "" {
 		c.arg, err = getFsArg(cfg)
 		if err != nil {
@@ -350,6 +353,54 @@ func (c *rollbackArg) Run() error {
 	}
 
 	migrate.Rollback(ctx, fs)
+
+	return nil
+}
+
+type testArg struct {
+	arg fsArg
+}
+
+func (c *testArg) PrepareCommand() *cobra.Command {
+	testCmd := &cobra.Command{
+		Use:   "test",
+		Short: "test s3 fs",
+		Run:   RunFactory(c),
+	}
+
+	testCmd.Flags().StringP("input", "i", "", "input")
+
+	return testCmd
+}
+
+func (c *testArg) FromCommand(cmd *cobra.Command) (err error) {
+	cfg := cmd.Flag("input").Value.String()
+	c.arg, err = getFsArg(cfg)
+	if err != nil {
+		panic(err)
+	}
+	return nil
+}
+
+func (c *testArg) String() string {
+	return ""
+}
+
+func (c *testArg) Run() error {
+	blockio.Start("")
+	defer blockio.Stop("")
+
+	ctx := context.Background()
+	fs := migrate.NewS3Fs(ctx, c.arg.Name, c.arg.Endpoint, c.arg.Bucket, c.arg.KeyPrefix)
+
+	entries, err := fs.List(ctx, ckpDir)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, entry := range entries {
+		println(entry.Name, entry.IsDir, entry.Size)
+	}
 
 	return nil
 }
