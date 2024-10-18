@@ -59,8 +59,14 @@ func GetCkpFiles(ctx context.Context, dataFs, objectFs fileservice.FileService) 
 	entries := ListCkpFiles(ctx, dataFs)
 	sinker := NewSinker(ObjectListSchema, objectFs)
 	defer sinker.Close()
-	for _, entry := range entries {
+	now := time.Now()
+	duration := time.Now()
+	for i, entry := range entries {
 		DumpCkpFiles(ctx, dataFs, entry, sinker)
+		if i%5 == 0 {
+			logutil.Infof("[dumpCkp] dump old ckp files %v/%v, cost %v, total %v", i, len(entries), time.Since(duration), time.Since(now))
+			duration = time.Now()
+		}
 	}
 	err := sinker.Sync(ctx)
 	if err != nil {
@@ -560,7 +566,7 @@ func RewriteCkp(
 	dbs, tbls, cols []objectio.ObjectStats,
 	tid uint64,
 ) {
-	start := time.Now()
+	now := time.Now()
 
 	ckpData := logtail.NewCheckpointData("", common.CheckpointAllocator)
 	dataObjectBatch := ckpData.GetObjectBatchs()
@@ -598,6 +604,7 @@ func RewriteCkp(
 		metaOffset += int32(len(objs))
 	}
 
+	start := time.Now()
 	// write three table
 	fillObjStats(dbs, pkgcatalog.MO_DATABASE_ID)
 	fillObjStats(tbls, pkgcatalog.MO_TABLES_ID)
@@ -615,6 +622,9 @@ func RewriteCkp(
 		panic(err)
 	}
 
+	logutil.Infof("[rewrite] replay object stats done, cost %v, total %v", time.Since(start), time.Since(now))
+
+	start = time.Now()
 	// write delta location
 	ReplayDeletes(
 		ctx,
@@ -627,6 +637,9 @@ func RewriteCkp(
 		tombstoneObjectBatch,
 		rollbackSinker)
 
+	logutil.Infof("[rewrite] replay delta location done, cost %v, total %v", time.Since(start), time.Since(now))
+
+	start = time.Now()
 	cnLocation, tnLocation, files, err := ckpData.WriteTo(dataFS, logtail.DefaultCheckpointBlockRows, logtail.DefaultCheckpointSize)
 	if err != nil {
 		panic(err)
@@ -672,6 +685,7 @@ func RewriteCkp(
 	if err != nil {
 		panic(err)
 	}
+	logutil.Infof("[rewrite] rewrite ckp done, cost %v, total %v", time.Since(start), time.Since(now))
 
 	logutil.Info("rewrite ckp",
 		zap.Int("data object cnt", dataObjectBatch.Length()),
@@ -679,7 +693,7 @@ func RewriteCkp(
 		zap.String("cn location", cnLocation.Name().String()),
 		zap.String("tn location", tnLocation.Name().String()),
 		zap.String("files", strings.Join(files, ",")),
-		zap.Duration("total took", time.Since(start)))
+		zap.Duration("total took", time.Since(now)))
 
 }
 
@@ -784,7 +798,7 @@ func ReplayObjectBatch(
 	tid uint64,
 	sinker *engine_util.Sinker,
 ) int32 {
-
+	now := time.Now()
 	gatherTablId := func(mm *map[[2]uint64][]int, bat *containers.Batch) {
 		dbidVec := bat.GetVectorByName(SnapshotAttr_DBID)
 		tidVec := bat.GetVectorByName(SnapshotAttr_TID)
@@ -809,6 +823,9 @@ func ReplayObjectBatch(
 	gatherTablId(&tblIdx1, srcObjInfoBat)
 	gatherTablId(&tblIdx2, srcTNObjInfoBat)
 
+	i := 0
+	duration := time.Now()
+
 	for id, idxes2 := range tblIdx2 {
 		replayObjectBatchHelper(ctx, ts, srcTNObjInfoBat, dest, idxes2, tid, sinker)
 		ckpData.UpdateDataObjectMeta(id[1], metaOffset, metaOffset+int32(len(idxes2)))
@@ -821,6 +838,11 @@ func ReplayObjectBatch(
 
 			delete(tblIdx1, id)
 		}
+		if i%5 == 0 {
+			logutil.Infof("[objectStats] replay object batch %v/%v, cost %v, total %v", i, len(tblIdx2), time.Since(duration), time.Since(now))
+			duration = time.Now()
+		}
+		i++
 	}
 
 	for id, idxes := range tblIdx1 {
@@ -941,7 +963,7 @@ func ReplayDeletes(
 	srcBat, srcTxnBat *containers.Batch,
 	destBat *containers.Batch,
 	sinker *engine_util.Sinker) {
-
+	now := time.Now()
 	var (
 		err         error
 		locColIdx   = 6
@@ -991,7 +1013,7 @@ func ReplayDeletes(
 		})
 
 	}
-
+	duration := time.Now()
 	for i := 0; i < len(tblBlks); i++ {
 		dd := <-result
 
@@ -1013,6 +1035,10 @@ func ReplayDeletes(
 
 		ckpData.UpdateTombstoneObjectMeta(dd.tblId, metaOffset, metaOffset+int32(len(dd.statsList)))
 		metaOffset += int32(len(dd.statsList))
+		if i%5 == 0 {
+			logutil.Infof("[deltaLoc] replay tombstone batch %v/%v, cost %v, total %v", i, len(tblBlks), time.Since(duration), time.Since(now))
+			duration = time.Now()
+		}
 	}
 
 	close(result)
@@ -1077,6 +1103,8 @@ func GcCheckpointFiles(ctx context.Context, fs fileservice.FileService) {
 						objid := string(data)
 						if err = fs.Delete(ctx, objid); err != nil {
 							logutil.Infof("asdf delete %s failed, err: %v", objid, err)
+						} else {
+							logutil.Infof("asdf delete %s success", objid)
 						}
 					}
 				})
@@ -1115,6 +1143,8 @@ func Rollback(ctx context.Context, fs fileservice.FileService) {
 				name := bat.Vecs[0].GetBytesAt(i)
 				if err = fs.Delete(ctx, string(name)); err != nil {
 					logutil.Infof("asdf delete %s failed, err: %v", string(name), err)
+				} else {
+					logutil.Infof("asdf delete %s success", string(name))
 				}
 			}
 		}

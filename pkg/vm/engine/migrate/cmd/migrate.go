@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"time"
 
 	jsoniter "github.com/json-iterator/go"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -173,22 +174,24 @@ func (c *replayArg) Run() error {
 
 	c.meta = getLatestCkpMeta(dataFS, ckpDir)
 
-	// 1. Backup ckp meta files
+	now := time.Now()
+	start := time.Now()
+	// Backup ckp meta files
 	cleanDir(dataFS, ckpBakDir)
 	migrate.BackupCkpDir(ctx, dataFS, ckpDir)
 	migrate.BackupCkpDir(ctx, dataFS, gcDir)
+	logutil.Infof("[duration] backup ckp files done, cost %v, total %v", time.Since(start), time.Since(now))
 
-	// 2. Clean ckp and gc dir
-	cleanDir(dataFS, ckpDir)
-	cleanDir(dataFS, gcDir)
-
-	// 3. ListCkpFiles
+	// ListCkpFiles
+	start = time.Now()
 	migrate.GetCkpFiles(ctx, dataFS, oldObjFS)
+	logutil.Infof("[duration] dump old ckp files done, cost %v, total %v", time.Since(start), time.Since(now))
 
-	// 4. ReadCkp11File
+	// ReadCkp11File
+	start = time.Now()
 	fromEntry, ckpbats := migrate.ReadCkp11File(ctx, dataFS, filepath.Join(ckpBakDir, c.meta))
 
-	// 5. Replay To 1.3 catalog
+	// Replay To 1.3 catalog
 	cata := migrate.ReplayCatalogFromCkpData11(ckpbats)
 
 	//dbIt := cata.MakeDBIt(false)
@@ -201,10 +204,10 @@ func (c *replayArg) Run() error {
 	//	}
 	//}
 
-	// 6. Dump catalog to 3 tables batch
+	// Dump catalog to 3 tables batch
 	bDb, bTbl, bCol, snapshotMeta := migrate.DumpCatalogToBatches(cata)
 
-	// 7. Sink and get object stats
+	// Sink and get object stats
 	objDB := migrate.SinkBatch(ctx, catalog.SystemDBSchema, bDb, dataFS)
 	objTbl := migrate.SinkBatch(ctx, catalog.SystemTableSchema, bTbl, dataFS)
 	objCol := migrate.SinkBatch(ctx, catalog.SystemColumnSchema, bCol, dataFS)
@@ -220,7 +223,14 @@ func (c *replayArg) Run() error {
 		migrate.SinkObjectBatch(ctx, rollbackSinker, ss)
 	}
 
-	// 8. Write 1.3 Global Ckp
+	logutil.Infof("[duration] replay catalog done, cost %v, total %v", time.Since(start), time.Since(now))
+
+	// Clean ckp and gc dir
+	cleanDir(dataFS, ckpDir)
+	cleanDir(dataFS, gcDir)
+
+	// Write 1.3 Global Ckp
+	start = time.Now()
 	txnNode := &txnbase.TxnMVCCNode{
 		Start:   types.BuildTS(42424242, 0),
 		Prepare: types.BuildTS(42424243, 0),
@@ -232,6 +242,8 @@ func (c *replayArg) Run() error {
 
 	migrate.RewriteCkp(ctx, cata, dataFS, newObjFS, rollbackFS,
 		fromEntry, ckpbats, txnNode, entryNode, objDB, objTbl, objCol, c.tid)
+
+	logutil.Infof("[duration] rewrite ckp done, cost %v, total %v", time.Since(start), time.Since(now))
 
 	for _, v := range objDB {
 		println(v.String())

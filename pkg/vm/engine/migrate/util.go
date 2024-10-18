@@ -128,6 +128,14 @@ func BackupCkpDir(ctx context.Context, fs fileservice.FileService, dir string) {
 			logutil.Infof("backup %d/%d %s", i, len(entries), entry.Name)
 		}
 	}
+
+	bakentries, err := fs.List(ctx, bakdir)
+	if err != nil {
+		panic(err)
+	}
+	if len(bakentries) != len(entries) {
+		panic("backup failed")
+	}
 }
 
 func NewS3Fs(ctx context.Context, name, endpoint, bucket, keyPrefix string) fileservice.FileService {
@@ -185,6 +193,8 @@ func cleanDir(fs fileservice.FileService, dir string) {
 		err := fs.Delete(ctx, dir+"/"+entry.Name)
 		if err != nil {
 			logutil.Infof("asdf delete %s/%s failed", dir, entry.Name)
+		} else {
+			logutil.Infof("asdf delete %s/%s success", dir, entry.Name)
 		}
 	}
 }
