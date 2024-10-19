@@ -57,14 +57,7 @@ func (c *migrateArg) Run() error {
 	return nil
 }
 
-type fsArg struct {
-	Name      string `json:"name"`
-	Endpoint  string `json:"endpoint"`
-	Bucket    string `json:"bucket"`
-	KeyPrefix string `json:"key_prefix"`
-}
-
-func getFsArg(input string) (arg fsArg, err error) {
+func getFsArg(input string) (arg migrate.FSArg, err error) {
 	var data []byte
 	if data, err = os.ReadFile(input); err != nil {
 		return
@@ -76,7 +69,7 @@ func getFsArg(input string) (arg fsArg, err error) {
 }
 
 type replayArg struct {
-	arg       fsArg
+	arg       migrate.FSArg
 	cfg, meta string
 	rootDir   string
 	tid       uint64
@@ -166,10 +159,10 @@ func (c *replayArg) Run() error {
 		newObjFS = migrate.NewFileFs(ctx, path.Join(c.rootDir, newObjDir))
 		rollbackFS = migrate.NewFileFs(ctx, path.Join(c.rootDir, rollbackDir))
 	} else {
-		dataFS = migrate.NewS3Fs(ctx, c.arg.Name, c.arg.Endpoint, c.arg.Bucket, c.arg.KeyPrefix)
-		oldObjFS = migrate.NewS3Fs(ctx, c.arg.Name, c.arg.Endpoint, c.arg.Bucket, path.Join(c.arg.KeyPrefix, oldObjDir))
-		newObjFS = migrate.NewS3Fs(ctx, c.arg.Name, c.arg.Endpoint, c.arg.Bucket, path.Join(c.arg.KeyPrefix, newObjDir))
-		rollbackFS = migrate.NewS3Fs(ctx, c.arg.Name, c.arg.Endpoint, c.arg.Bucket, path.Join(c.arg.KeyPrefix, rollbackDir))
+		dataFS = migrate.NewS3FsWithCache(ctx, c.arg)
+		oldObjFS = migrate.NewS3Fs(ctx, c.arg, oldObjDir)
+		newObjFS = migrate.NewS3Fs(ctx, c.arg, newObjDir)
+		rollbackFS = migrate.NewS3Fs(ctx, c.arg, rollbackDir)
 	}
 
 	c.meta = getLatestCkpMeta(dataFS, ckpDir)
@@ -177,7 +170,6 @@ func (c *replayArg) Run() error {
 	now := time.Now()
 	start := time.Now()
 	// Backup ckp meta files
-	cleanDir(dataFS, ckpBakDir)
 	migrate.BackupCkpDir(ctx, dataFS, ckpDir)
 	migrate.BackupCkpDir(ctx, dataFS, gcDir)
 	logutil.Infof("[duration] backup ckp files done, cost %v, total %v", time.Since(start), time.Since(now))
@@ -269,7 +261,7 @@ func (c *replayArg) Run() error {
 
 type gcArg struct {
 	rootDir string
-	arg     fsArg
+	arg     migrate.FSArg
 }
 
 func (c *gcArg) PrepareCommand() *cobra.Command {
@@ -310,7 +302,7 @@ func (c *gcArg) Run() error {
 	if c.rootDir != "" { // just for local test
 		fs = migrate.NewFileFs(ctx, c.rootDir)
 	} else {
-		fs = migrate.NewS3Fs(ctx, c.arg.Name, c.arg.Endpoint, c.arg.Bucket, c.arg.KeyPrefix)
+		fs = migrate.NewS3FsWithCache(ctx, c.arg)
 	}
 
 	migrate.GcCheckpointFiles(ctx, fs)
@@ -320,7 +312,7 @@ func (c *gcArg) Run() error {
 
 type rollbackArg struct {
 	rootDir string
-	arg     fsArg
+	arg     migrate.FSArg
 }
 
 func (c *rollbackArg) PrepareCommand() *cobra.Command {
@@ -361,7 +353,7 @@ func (c *rollbackArg) Run() error {
 	if c.rootDir != "" { // just for local test
 		fs = migrate.NewFileFs(ctx, c.rootDir)
 	} else {
-		fs = migrate.NewS3Fs(ctx, c.arg.Name, c.arg.Endpoint, c.arg.Bucket, c.arg.KeyPrefix)
+		fs = migrate.NewS3FsWithCache(ctx, c.arg)
 	}
 
 	migrate.Rollback(ctx, fs)
@@ -370,7 +362,7 @@ func (c *rollbackArg) Run() error {
 }
 
 type testArg struct {
-	arg fsArg
+	arg migrate.FSArg
 }
 
 func (c *testArg) PrepareCommand() *cobra.Command {
@@ -403,7 +395,7 @@ func (c *testArg) Run() error {
 	defer blockio.Stop("")
 
 	ctx := context.Background()
-	fs := migrate.NewS3Fs(ctx, c.arg.Name, c.arg.Endpoint, c.arg.Bucket, c.arg.KeyPrefix)
+	fs := migrate.NewS3FsWithCache(ctx, c.arg)
 
 	entries, err := fs.List(ctx, ckpDir)
 	if err != nil {

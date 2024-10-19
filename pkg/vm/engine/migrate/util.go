@@ -2,9 +2,7 @@ package migrate
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"path/filepath"
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -13,7 +11,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -138,14 +140,46 @@ func BackupCkpDir(ctx context.Context, fs fileservice.FileService, dir string) {
 	}
 }
 
-func NewS3Fs(ctx context.Context, name, endpoint, bucket, keyPrefix string) fileservice.FileService {
+type FSArg struct {
+	Name      string `json:"name"`
+	Endpoint  string `json:"endpoint"`
+	Bucket    string `json:"bucket"`
+	KeyPrefix string `json:"key_prefix"`
+	MemCache  uint64 `json:"mem_cache"`
+	DiskCache uint64 `json:"disk_cache"`
+	DiskPath  string `json:"disk_path"`
+}
+
+func NewS3Fs(ctx context.Context, fsArg FSArg, dir string) fileservice.FileService {
 	arg := fileservice.ObjectStorageArguments{
-		Name:      name,
-		Endpoint:  endpoint,
-		Bucket:    bucket,
-		KeyPrefix: keyPrefix,
+		Name:      fsArg.Name,
+		Endpoint:  fsArg.Endpoint,
+		Bucket:    fsArg.Bucket,
+		KeyPrefix: filepath.Join(fsArg.KeyPrefix, dir),
 	}
 	fs, err := fileservice.NewS3FS(ctx, arg, fileservice.DisabledCacheConfig, nil, false, false)
+	if err != nil {
+		panic(err)
+	}
+	return fs
+}
+
+func NewS3FsWithCache(ctx context.Context, fsArg FSArg) fileservice.FileService {
+	arg := fileservice.ObjectStorageArguments{
+		Name:      fsArg.Name,
+		Endpoint:  fsArg.Endpoint,
+		Bucket:    fsArg.Bucket,
+		KeyPrefix: fsArg.KeyPrefix,
+	}
+	mem := toml.ByteSize(fsArg.MemCache)
+	disk := toml.ByteSize(fsArg.DiskCache)
+	dir := fsArg.DiskPath
+	cfg := fileservice.CacheConfig{
+		MemoryCapacity: &mem,
+		DiskCapacity:   &disk,
+		DiskPath:       &dir,
+	}
+	fs, err := fileservice.NewS3FS(ctx, arg, cfg, nil, false, false)
 	if err != nil {
 		panic(err)
 	}

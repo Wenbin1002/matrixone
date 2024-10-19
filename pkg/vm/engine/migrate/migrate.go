@@ -55,7 +55,10 @@ func ListCkpFiles(ctx context.Context, fs fileservice.FileService) (res []string
 	return
 }
 
+var locs map[string]objectio.Location
+
 func GetCkpFiles(ctx context.Context, dataFs, objectFs fileservice.FileService) {
+	locs = make(map[string]objectio.Location)
 	entries := ListCkpFiles(ctx, dataFs)
 	sinker := NewSinker(ObjectListSchema, objectFs)
 	defer sinker.Close()
@@ -142,6 +145,10 @@ func DumpCkpFiles(ctx context.Context, fs fileservice.FileService, filepath stri
 		collectDeltaLoc(bats[BLKMetaInsertTxnIDX])
 	}
 	for _, entry := range entries {
+		if locs[entry.GetTNLocation().Name().String()] != nil {
+			continue
+		}
+		locs[entry.GetTNLocation().Name().String()] = entry.GetTNLocation()
 		data := GetCkpData(ctx, entry, fs)
 		if data == nil {
 			continue
