@@ -42,6 +42,9 @@ func (c *migrateArg) PrepareCommand() *cobra.Command {
 	test := testArg{}
 	migrateCmd.AddCommand(test.PrepareCommand())
 
+	backup := backupArg{}
+	migrateCmd.AddCommand(backup.PrepareCommand())
+
 	return migrateCmd
 }
 
@@ -110,6 +113,7 @@ const (
 	ckpDir    = "ckp"
 	ckpBakDir = "ckp-bak"
 	gcDir     = "gc"
+	gcBakDir  = "gc-bak"
 
 	oldObjDir   = "rewritten/old"
 	newObjDir   = "rewritten/new"
@@ -170,8 +174,8 @@ func (c *replayArg) Run() error {
 	now := time.Now()
 	start := time.Now()
 	// Backup ckp meta files
-	migrate.BackupCkpDir(ctx, dataFS, ckpDir)
-	migrate.BackupCkpDir(ctx, dataFS, gcDir)
+	migrate.BackupCkpDir(ctx, dataFS, ckpDir, ckpBakDir)
+	migrate.BackupCkpDir(ctx, dataFS, gcDir, gcBakDir)
 	logutil.Infof("[duration] backup ckp files done, cost %v, total %v", time.Since(start), time.Since(now))
 
 	// ListCkpFiles
@@ -357,6 +361,47 @@ func (c *rollbackArg) Run() error {
 	}
 
 	migrate.Rollback(ctx, fs)
+
+	return nil
+}
+
+type backupArg struct {
+	arg migrate.FSArg
+}
+
+func (c *backupArg) PrepareCommand() *cobra.Command {
+	testCmd := &cobra.Command{
+		Use:   "backup",
+		Short: "backup ckp and gc",
+		Run:   RunFactory(c),
+	}
+
+	testCmd.Flags().StringP("input", "i", "", "input")
+
+	return testCmd
+}
+
+func (c *backupArg) FromCommand(cmd *cobra.Command) (err error) {
+	cfg := cmd.Flag("input").Value.String()
+	c.arg, err = getFsArg(cfg)
+	if err != nil {
+		panic(err)
+	}
+	return nil
+}
+
+func (c *backupArg) String() string {
+	return ""
+}
+
+func (c *backupArg) Run() error {
+	blockio.Start("")
+	defer blockio.Stop("")
+
+	ctx := context.Background()
+	fs := migrate.NewS3FsWithCache(ctx, c.arg)
+	migrate.BackupCkpDir(ctx, fs, ckpDir, filepath.Join("backup", ckpDir))
+	migrate.BackupCkpDir(ctx, fs, gcDir, filepath.Join("backup", gcDir))
 
 	return nil
 }

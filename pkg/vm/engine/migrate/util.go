@@ -97,13 +97,12 @@ func WriteFile(fs fileservice.FileService, file string, data []byte) error {
 	return fs.Write(ctx, vec)
 }
 
-func BackupCkpDir(ctx context.Context, fs fileservice.FileService, dir string) {
-	bakdir := dir + "-bak"
+func BackupCkpDir(ctx context.Context, fs fileservice.FileService, dir, dest string) {
 
 	{
-		entries, _ := fs.List(context.Background(), bakdir)
+		entries, _ := fs.List(context.Background(), dest)
 		for _, entry := range entries {
-			fs.Delete(ctx, bakdir+"/"+entry.Name)
+			fs.Delete(ctx, dest+"/"+entry.Name)
 		}
 	}
 
@@ -117,13 +116,13 @@ func BackupCkpDir(ctx context.Context, fs fileservice.FileService, dir string) {
 			panic("bad ckp dir")
 		}
 	}
-	logutil.Infof("backup ckp dir %s to %s, %v entries", dir, bakdir, len(entries))
+	logutil.Infof("backup ckp dir %s to %s, %v entries", dir, dest, len(entries))
 	for i, entry := range entries {
 		data, err := ReadFile(fs, dir+"/"+entry.Name)
 		if err != nil {
 			panic(err)
 		}
-		if err := WriteFile(fs, bakdir+"/"+entry.Name, data); err != nil {
+		if err := WriteFile(fs, dest+"/"+entry.Name, data); err != nil {
 			panic(err)
 		}
 		if i%5 == 0 {
@@ -131,7 +130,7 @@ func BackupCkpDir(ctx context.Context, fs fileservice.FileService, dir string) {
 		}
 	}
 
-	bakentries, err := fs.List(ctx, bakdir)
+	bakentries, err := fs.List(ctx, dest)
 	if err != nil {
 		panic(err)
 	}
