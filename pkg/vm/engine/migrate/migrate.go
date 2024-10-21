@@ -735,7 +735,7 @@ func replayObjectBatchHelper(
 	ctx context.Context,
 	ts types.TS,
 	src, dest *containers.Batch,
-	indexes []int, tid uint64,
+	indexes []int,
 	sinker *engine_util.Sinker,
 ) {
 
@@ -753,10 +753,6 @@ func replayObjectBatchHelper(
 	bat := MakeBasicRespBatchFromSchema(ObjectListSchema, common.CheckpointAllocator, nil)
 
 	for _, idx := range indexes {
-		if tidVec.Get(idx).(uint64) == tid {
-			continue
-		}
-
 		oldStatsBytes := objectStats.Get(idx).([]byte)
 		oldStatsBytes = append(oldStatsBytes, byte(0))
 		obj := objectio.ObjectStats(oldStatsBytes)
@@ -834,12 +830,15 @@ func ReplayObjectBatch(
 	duration := time.Now()
 
 	for id, idxes2 := range tblIdx2 {
-		replayObjectBatchHelper(ctx, ts, srcTNObjInfoBat, dest, idxes2, tid, sinker)
+		if id[1] == tid {
+			continue
+		}
+		replayObjectBatchHelper(ctx, ts, srcTNObjInfoBat, dest, idxes2, sinker)
 		ckpData.UpdateDataObjectMeta(id[1], metaOffset, metaOffset+int32(len(idxes2)))
 		metaOffset += int32(len(idxes2))
 
 		if idxes1 := tblIdx1[id]; len(idxes1) != 0 {
-			replayObjectBatchHelper(ctx, ts, srcObjInfoBat, dest, idxes1, tid, sinker)
+			replayObjectBatchHelper(ctx, ts, srcObjInfoBat, dest, idxes1, sinker)
 			ckpData.UpdateDataObjectMeta(id[1], metaOffset, metaOffset+int32(len(idxes1)))
 			metaOffset += int32(len(idxes1))
 
@@ -853,7 +852,10 @@ func ReplayObjectBatch(
 	}
 
 	for id, idxes := range tblIdx1 {
-		replayObjectBatchHelper(ctx, ts, srcObjInfoBat, dest, idxes, tid, sinker)
+		if id[1] == tid {
+			continue
+		}
+		replayObjectBatchHelper(ctx, ts, srcObjInfoBat, dest, idxes, sinker)
 		ckpData.UpdateDataObjectMeta(id[1], metaOffset, metaOffset+int32(len(idxes)))
 		metaOffset += int32(len(idxes))
 	}
