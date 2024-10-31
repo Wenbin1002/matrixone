@@ -107,7 +107,6 @@ func Test_BasicInsertDelete(t *testing.T) {
 				require.NoError(t, vector.AppendFixedList[types.Rowid](bat2.Vecs[0], waitedDeletes, nil, mp))
 				bat2.SetRowCount(len(waitedDeletes))
 			})
-
 		require.NoError(t, relation.Delete(ctx, bat2, catalog.Row_ID))
 		require.NoError(t, txn.Commit(ctx))
 	}
@@ -195,7 +194,6 @@ func Test_BasicBigInsertDelete(t *testing.T) {
 	// read row id and pk data
 	tombstoneBat := batch.NewWithSize(1)
 	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	//tombstoneBat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
 	{
 		disttaeEngine.SubscribeTable(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx), false)
 		txn, _, reader, err := testutil.GetTableTxnReader(
@@ -203,7 +201,9 @@ func Test_BasicBigInsertDelete(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		ret := testutil.EmptyBatchFromSchema(schema)
+		ret := batch.NewWithSize(1)
+		ret.Attrs = []string{catalog.Row_ID}
+		ret.Vecs = []*vector.Vector{vector.NewVec(types.T_Rowid.ToType())}
 
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -216,20 +216,13 @@ func Test_BasicBigInsertDelete(t *testing.T) {
 			for i := range ret.RowCount() {
 				err = vector.AppendFixed[types.Rowid](
 					tombstoneBat.Vecs[0],
-					vector.GetFixedAtNoTypeCheck[types.Rowid](ret.Vecs[1], i),
+					vector.GetFixedAtWithTypeCheck[types.Rowid](ret.Vecs[0], i),
 					false, mp)
 				require.NoError(t, err)
-				//
-				//err = vector.AppendFixed[int32](
-				//	tombstoneBat.Vecs[1],
-				//	vector.GetFixedAtNoTypeCheck[int32](ret.Vecs[0], i),
-				//	false, mp)
-				//require.NoError(t, err)
 			}
 		}
 
 		require.NoError(t, txn.Commit(ctx))
-		println("asdf", tombstoneBat.Vecs[0].String())
 		tombstoneBat.SetRowCount(tombstoneBat.Vecs[0].Length())
 		require.Equal(t, bat.Length(), tombstoneBat.Vecs[0].Length())
 	}
@@ -238,13 +231,12 @@ func Test_BasicBigInsertDelete(t *testing.T) {
 	{
 		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
-		require.Equal(t, 10, tombstoneBat.RowCount())
-		require.NoError(t, relation.Delete(ctx, tombstoneBat, catalog.Row_ID))
+		bat2, err := tombstoneBat.Window(0, 5)
+		require.NoError(t, err)
+		require.NoError(t, relation.Delete(ctx, bat2, catalog.Row_ID))
 		require.NoError(t, txn.Commit(ctx))
 	}
 
-	stat, _ := disttaeEngine.GetPartitionStateStats(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx))
-	println("asdf", stat.String())
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 
 	require.NoError(t, err)
