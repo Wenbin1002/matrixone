@@ -17,6 +17,8 @@ package test
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"testing"
 	"time"
 
@@ -41,6 +43,231 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// #region basic test
+
+func Test_BasicInsertDelete(t *testing.T) {
+	var (
+		err          error
+		mp           *mpool.MPool
+		txn          client.TxnOperator
+		accountId    = catalog.System_Account
+		tableName    = "test_table"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		relation engine.Relation
+		_        engine.Database
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
+	require.NoError(t, err)
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{TaeEngineOptions: opt}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	rowsCount := 10
+	bat := catalog2.MockBatch(schema, rowsCount)
+	bat1 := containers.ToCNBatch(bat)
+
+	// write table
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		require.NoError(t, relation.Write(ctx, bat1))
+
+		var bat2 *batch.Batch
+		txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
+			relation.GetDBID(ctx), relation.GetTableID(ctx), 1, func(entry disttae.Entry) {
+				waitedDeletes := vector.MustFixedColWithTypeCheck[types.Rowid](entry.Bat().GetVector(0))
+				waitedDeletes = waitedDeletes[:rowsCount/2]
+				bat2 = batch.NewWithSize(1)
+				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+				require.NoError(t, vector.AppendFixedList[types.Rowid](bat2.Vecs[0], waitedDeletes, nil, mp))
+				bat2.SetRowCount(len(waitedDeletes))
+			})
+
+		require.NoError(t, relation.Delete(ctx, bat2, catalog.Row_ID))
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
+	reader, err := testutil.GetRelationReader(
+		ctx,
+		disttaeEngine,
+		txn,
+		relation,
+		nil,
+		mp,
+		t,
+	)
+	require.NoError(t, err)
+
+	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
+	require.NoError(t, err)
+
+	require.Equal(t, 5, ret.RowCount())
+	require.NoError(t, txn.Commit(ctx))
+}
+
+func Test_BasicBigInsertDelete(t *testing.T) {
+	var (
+		err          error
+		mp           *mpool.MPool
+		txn          client.TxnOperator
+		accountId    = catalog.System_Account
+		tableName    = "test_table"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		relation engine.Relation
+		_        engine.Database
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
+	require.NoError(t, err)
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{TaeEngineOptions: opt},
+		t,
+		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
+		testutil.WithDisttaeEngineWorkspaceThreshold(1),
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	rowsCount := 10
+	bat := catalog2.MockBatch(schema, rowsCount)
+	bat1 := containers.ToCNBatch(bat)
+
+	// write table
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		require.NoError(t, relation.Write(ctx, bat1))
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+	// read row id and pk data
+	tombstoneBat := batch.NewWithSize(1)
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	//tombstoneBat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	{
+		disttaeEngine.SubscribeTable(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx), false)
+		txn, _, reader, err := testutil.GetTableTxnReader(
+			ctx, disttaeEngine, databaseName, tableName, nil, mp, t,
+		)
+		require.NoError(t, err)
+
+		ret := testutil.EmptyBatchFromSchema(schema)
+
+		for {
+			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+
+			if done {
+				break
+			}
+
+			require.NoError(t, err)
+			for i := range ret.RowCount() {
+				err = vector.AppendFixed[types.Rowid](
+					tombstoneBat.Vecs[0],
+					vector.GetFixedAtNoTypeCheck[types.Rowid](ret.Vecs[1], i),
+					false, mp)
+				require.NoError(t, err)
+				//
+				//err = vector.AppendFixed[int32](
+				//	tombstoneBat.Vecs[1],
+				//	vector.GetFixedAtNoTypeCheck[int32](ret.Vecs[0], i),
+				//	false, mp)
+				//require.NoError(t, err)
+			}
+		}
+
+		require.NoError(t, txn.Commit(ctx))
+		println("asdf", tombstoneBat.Vecs[0].String())
+		tombstoneBat.SetRowCount(tombstoneBat.Vecs[0].Length())
+		require.Equal(t, bat.Length(), tombstoneBat.Vecs[0].Length())
+	}
+
+	// delete batch
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+		require.Equal(t, 10, tombstoneBat.RowCount())
+		require.NoError(t, relation.Delete(ctx, tombstoneBat, catalog.Row_ID))
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+	stat, _ := disttaeEngine.GetPartitionStateStats(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx))
+	println("asdf", stat.String())
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+
+	require.NoError(t, err)
+	reader, err := testutil.GetRelationReader(
+		ctx,
+		disttaeEngine,
+		txn,
+		relation,
+		nil,
+		mp,
+		t,
+	)
+	require.NoError(t, err)
+
+	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
+	require.NoError(t, err)
+
+	require.Equal(t, 5, ret.RowCount())
+	require.NoError(t, txn.Commit(ctx))
+}
+
+// #endregion
 
 func Test_DeleteUncommittedBlock(t *testing.T) {
 	var (

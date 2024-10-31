@@ -133,6 +133,8 @@ func (txn *Transaction) WriteBatch(
 			txn.workspaceSize += uint64(bat.Size())
 			txn.insertCount += bat.RowCount()
 		}
+
+		logutil.Infof("asdf %v", bat.Vecs[0].String())
 	}
 
 	if typ == DELETE && tableId != catalog.MO_DATABASE_ID &&
@@ -648,6 +650,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int) e
 		}
 		defer s3Writer.Free(txn.proc.GetMPool())
 		for i := 0; i < len(mp[tbKey]); i++ {
+			logutil.Infof("delete batch: %v", mp[tbKey][i].Vecs[0].String())
 			s3Writer.StashBatch(txn.proc, mp[tbKey][i])
 		}
 		_, stats, err := s3Writer.SortAndSync(ctx, txn.proc)

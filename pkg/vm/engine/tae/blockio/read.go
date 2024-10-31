@@ -838,6 +838,7 @@ func FillBlockDeleteMask(
 	}
 	defer release()
 
+	println("asdfasdf ", persistedDeletes[0].String())
 	if createdByCN {
 		deleteMask = EvalDeleteMaskFromCNCreatedTombstones(blockId, &persistedDeletes[0])
 	} else {
