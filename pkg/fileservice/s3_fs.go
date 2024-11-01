@@ -665,7 +665,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		// all cache hit
 		return nil
 	}
-
+	if ctx.Value("table") != nil {
+		logutil.Infof("asdf table %v s3 get object %v", ctx.Value("table"), vector.FilePath)
+	}
 	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err

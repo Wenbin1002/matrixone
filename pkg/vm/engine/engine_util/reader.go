@@ -393,7 +393,7 @@ func (r *reader) Read(
 	outBatch *batch.Batch,
 ) (isEnd bool, err error) {
 	outBatch.CleanOnlyData()
-
+	ctx = context.WithValue(ctx, "table", r.name)
 	var dataState engine.DataState
 
 	start := time.Now()
