@@ -95,7 +95,7 @@ func Test_BasicInsertDelete(t *testing.T) {
 		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
 
-		require.NoError(t, relation.Write(ctx, bat1))
+		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat1, false, true))
 
 		var bat2 *batch.Batch
 		txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
@@ -107,7 +107,7 @@ func Test_BasicInsertDelete(t *testing.T) {
 				require.NoError(t, vector.AppendFixedList[types.Rowid](bat2.Vecs[0], waitedDeletes, nil, mp))
 				bat2.SetRowCount(len(waitedDeletes))
 			})
-		require.NoError(t, relation.Delete(ctx, bat2, catalog.Row_ID))
+		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat2, true, true))
 		require.NoError(t, txn.Commit(ctx))
 	}
 
@@ -187,8 +187,7 @@ func Test_BasicBigInsertDelete(t *testing.T) {
 		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
 
-		require.NoError(t, relation.Write(ctx, bat1))
-		txn.GetWorkspace().UpdateSnapshotWriteOffset()
+		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat1, false, true))
 	}
 
 	// read row id
@@ -238,7 +237,7 @@ func Test_BasicBigInsertDelete(t *testing.T) {
 		require.NoError(t, err)
 		bat2, err := tombstoneBat.Window(0, 5)
 		require.NoError(t, err)
-		require.NoError(t, relation.Delete(ctx, bat2, catalog.Row_ID))
+		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat2, true, true))
 		require.NoError(t, txn.Commit(ctx))
 	}
 

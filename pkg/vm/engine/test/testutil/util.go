@@ -411,9 +411,13 @@ func WriteToRelation(
 	txn client.TxnOperator,
 	relation engine.Relation,
 	bat *batch.Batch,
-	toEndStatement bool,
+	isDelete, toEndStatement bool,
 ) (err error) {
-	err = relation.Write(ctx, bat)
+	if isDelete {
+		err = relation.Delete(ctx, bat, catalog2.Row_ID)
+	} else {
+		err = relation.Write(ctx, bat)
+	}
 	if err == nil && toEndStatement {
 		EndThisStatement(txn)
 	}
