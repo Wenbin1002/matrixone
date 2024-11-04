@@ -188,16 +188,21 @@ func Test_BasicBigInsertDelete(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, relation.Write(ctx, bat1))
-		require.NoError(t, txn.Commit(ctx))
+		txn.GetWorkspace().UpdateSnapshotWriteOffset()
 	}
 
-	// read row id and pk data
+	// read row id
 	tombstoneBat := batch.NewWithSize(1)
 	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 	{
-		disttaeEngine.SubscribeTable(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx), false)
-		txn, _, reader, err := testutil.GetTableTxnReader(
-			ctx, disttaeEngine, databaseName, tableName, nil, mp, t,
+		reader, err := testutil.GetRelationReader(
+			ctx,
+			disttaeEngine,
+			txn,
+			relation,
+			nil,
+			mp,
+			t,
 		)
 		require.NoError(t, err)
 
