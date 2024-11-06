@@ -413,19 +413,25 @@ func WriteToRelation(
 	bat *batch.Batch,
 	isDelete, toEndStatement bool,
 ) (err error) {
+	txn.GetWorkspace().StartStatement()
 	if isDelete {
 		err = relation.Delete(ctx, bat, catalog2.Row_ID)
 	} else {
 		err = relation.Write(ctx, bat)
 	}
 	if err == nil && toEndStatement {
-		EndThisStatement(txn)
+		EndThisStatement(ctx, txn)
 	}
 	return
 }
 
 func EndThisStatement(
+	ctx context.Context,
 	txn client.TxnOperator,
-) {
+) (err error) {
+	err = txn.GetWorkspace().IncrStatementID(ctx, false)
+	txn.GetWorkspace().EndStatement()
 	txn.GetWorkspace().UpdateSnapshotWriteOffset()
+
+	return
 }

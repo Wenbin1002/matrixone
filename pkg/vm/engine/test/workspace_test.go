@@ -46,6 +46,7 @@ import (
 
 // #region basic test
 
+// insert 10 rows and delete 5 rows
 func Test_BasicInsertDelete(t *testing.T) {
 	var (
 		err          error
@@ -578,6 +579,257 @@ func Test_MultiTxnBigInsertDelete(t *testing.T) {
 	}
 
 	require.Equal(t, 10, cnt)
+	require.NoError(t, txn.Commit(ctx))
+}
+
+// #endregion
+// #region rollback test
+
+func Test_BasicRollbackStatement(t *testing.T) {
+	var (
+		err          error
+		mp           *mpool.MPool
+		txn          client.TxnOperator
+		accountId    = catalog.System_Account
+		tableName    = "test_table"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		relation engine.Relation
+		_        engine.Database
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
+	require.NoError(t, err)
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{TaeEngineOptions: opt},
+		t,
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	rowsCount := 20
+	bat := catalog2.MockBatch(schema, rowsCount)
+	bat1 := containers.ToCNBatch(bat.Window(0, 10))
+	bat2 := containers.ToCNBatch(bat.Window(10, 10))
+
+	// write table
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat1, false, true))
+
+		txn.GetWorkspace().StartStatement()
+		require.NoError(t, relation.Write(ctx, bat2))
+		require.NoError(t, txn.GetWorkspace().RollbackLastStatement(ctx))
+		require.NoError(t, txn.GetWorkspace().IncrStatementID(ctx, false))
+	}
+
+	{
+		var tombstoneBat *batch.Batch
+		txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
+			relation.GetDBID(ctx), relation.GetTableID(ctx), 1, func(entry disttae.Entry) {
+				waitedDeletes := vector.MustFixedColWithTypeCheck[types.Rowid](entry.Bat().GetVector(0))
+				waitedDeletes = waitedDeletes[:rowsCount/2]
+				tombstoneBat = batch.NewWithSize(1)
+				tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+				require.NoError(t, vector.AppendFixedList[types.Rowid](tombstoneBat.Vecs[0], waitedDeletes, nil, mp))
+				tombstoneBat.SetRowCount(len(waitedDeletes))
+			})
+
+		tombstoneBat2, err := tombstoneBat.Window(0, 5)
+		require.NoError(t, err)
+
+		require.NoError(t, relation.Delete(ctx, tombstoneBat, catalog.Row_ID))
+		require.NoError(t, txn.GetWorkspace().RollbackLastStatement(ctx))
+		require.NoError(t, txn.GetWorkspace().IncrStatementID(ctx, false))
+
+		require.NoError(t, relation.Delete(ctx, tombstoneBat2, catalog.Row_ID))
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
+
+	reader, err := testutil.GetRelationReader(
+		ctx,
+		disttaeEngine,
+		txn,
+		relation,
+		nil,
+		mp,
+		t,
+	)
+	require.NoError(t, err)
+
+	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
+	require.NoError(t, err)
+
+	require.Equal(t, 5, ret.RowCount())
+	require.NoError(t, txn.Commit(ctx))
+}
+
+func Test_BasicRollbackStatementBig(t *testing.T) {
+	var (
+		err          error
+		mp           *mpool.MPool
+		txn          client.TxnOperator
+		accountId    = catalog.System_Account
+		tableName    = "test_table"
+		databaseName = "test_database"
+
+		primaryKeyIdx = 3
+
+		relation engine.Relation
+		_        engine.Database
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	opt, err := testutil.GetS3SharedFileServiceOption(ctx, testutil.GetDefaultTestPath("test", t))
+	require.NoError(t, err)
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{TaeEngineOptions: opt},
+		t,
+		testutil.WithDisttaeEngineInsertEntryMaxCount(1),
+		testutil.WithDisttaeEngineWorkspaceThreshold(1),
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	rowsCount := 20
+	bat := catalog2.MockBatch(schema, rowsCount)
+	bat1 := containers.ToCNBatch(bat.Window(0, 10))
+	bat2 := containers.ToCNBatch(bat.Window(10, 10))
+
+	// write table
+	{
+		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat1, false, true))
+
+		txn.GetWorkspace().StartStatement()
+		require.NoError(t, relation.Write(ctx, bat2))
+		require.NoError(t, txn.GetWorkspace().RollbackLastStatement(ctx))
+		require.NoError(t, txn.GetWorkspace().IncrStatementID(ctx, false))
+	}
+
+	// read row id
+	tombstoneBat := batch.NewWithSize(1)
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	{
+		reader, err := testutil.GetRelationReader(
+			ctx,
+			disttaeEngine,
+			txn,
+			relation,
+			nil,
+			mp,
+			t,
+		)
+		require.NoError(t, err)
+
+		ret := batch.NewWithSize(1)
+		ret.Attrs = []string{catalog.Row_ID}
+		ret.Vecs = []*vector.Vector{vector.NewVec(types.T_Rowid.ToType())}
+
+		for {
+			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+
+			if done {
+				break
+			}
+
+			require.NoError(t, err)
+			for i := range ret.RowCount() {
+				err = vector.AppendFixed[types.Rowid](
+					tombstoneBat.Vecs[0],
+					vector.GetFixedAtWithTypeCheck[types.Rowid](ret.Vecs[0], i),
+					false, mp)
+				require.NoError(t, err)
+			}
+		}
+
+		tombstoneBat.SetRowCount(tombstoneBat.Vecs[0].Length())
+		require.Equal(t, bat1.RowCount(), tombstoneBat.Vecs[0].Length())
+	}
+
+	// delete batch
+	{
+		tb1, err := tombstoneBat.Window(0, 5)
+		require.NoError(t, err)
+		tb2, err := tombstoneBat.Window(5, 10)
+		require.NoError(t, err)
+
+		require.NoError(t, relation.Delete(ctx, tb1, catalog.Row_ID))
+		require.NoError(t, txn.GetWorkspace().RollbackLastStatement(ctx))
+		require.NoError(t, txn.GetWorkspace().IncrStatementID(ctx, false))
+
+		require.NoError(t, relation.Delete(ctx, tb2, catalog.Row_ID))
+		require.NoError(t, txn.Commit(ctx))
+	}
+
+	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
+
+	require.NoError(t, err)
+	reader, err := testutil.GetRelationReader(
+		ctx,
+		disttaeEngine,
+		txn,
+		relation,
+		nil,
+		mp,
+		t,
+	)
+	require.NoError(t, err)
+
+	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
+	require.NoError(t, err)
+
+	require.Equal(t, 5, ret.RowCount())
 	require.NoError(t, txn.Commit(ctx))
 }
 
