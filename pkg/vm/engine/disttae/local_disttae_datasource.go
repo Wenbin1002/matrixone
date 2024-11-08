@@ -1083,6 +1083,8 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 	attrs := objectio.GetTombstoneAttrs(objectio.HiddenColumnSelection_CommitTS)
 	cacheVectors := containers.NewVectors(len(attrs))
 
+	checkedObjCnt := 0
+
 	for iter.Next() && len(deleted) < len(rowIds) {
 		obj := iter.Entry()
 
@@ -1101,7 +1103,7 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 				continue
 			}
 		}
-
+		sameObj := false
 		for idx := 0; idx < int(obj.BlkCnt()) && len(rowIds) > len(deleted); idx++ {
 			location = obj.ObjectStats.BlockLocation(uint16(idx), objectio.BlockMaxRows)
 
@@ -1127,6 +1129,11 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 					if rowIds[i].EQ(&deletedRowIds[j]) &&
 						(commit == nil || commit[j].LE(&ls.snapshotTS)) {
 						deleted = append(deleted, int64(i))
+
+						if !sameObj {
+							checkedObjCnt++
+						}
+						sameObj = true
 						break
 					}
 				}
@@ -1134,6 +1141,11 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 
 			release()
 		}
+	}
+
+	println("asdf", checkedObjCnt)
+	if checkedObjCnt > 1 {
+		println("asdf")
 	}
 
 	return deleted, nil
