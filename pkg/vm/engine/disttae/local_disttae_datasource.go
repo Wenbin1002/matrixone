@@ -1143,10 +1143,5 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 		}
 	}
 
-	println("asdf", checkedObjCnt)
-	if checkedObjCnt > 1 {
-		println("asdf")
-	}
-
 	return deleted, nil
 }

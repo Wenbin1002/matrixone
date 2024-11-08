@@ -17,11 +17,8 @@ package test
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"testing"
 	"time"
 
@@ -43,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 
-	testutil3 "github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -688,9 +684,6 @@ func Test_MultiTxnS3Tombstones(t *testing.T) {
 				break
 			}
 
-			res := vector.MustFixedColWithTypeCheck[int64](ret.Vecs[0])
-			fmt.Printf("asdf %v", res)
-
 			require.NoError(t, err)
 			for i := range ret.RowCount() {
 				err = vector.AppendFixed[types.Rowid](
@@ -738,27 +731,12 @@ func Test_MultiTxnS3Tombstones(t *testing.T) {
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
 
-	var exes []colexec.ExpressionExecutor
-	proc := testutil3.NewProcessWithMPool("", mp)
-	expr := []*plan.Expr{
-		engine_util.MakeFunctionExprForTest("=", []*plan.Expr{
-			engine_util.MakeColExprForTest(0, types.T_int32),
-			plan2.MakePlan2Int64ConstExprWithType(0),
-		}),
-	}
-	for _, e := range expr {
-		plan2.ReplaceFoldExpr(proc, e, &exes)
-	}
-	for _, e := range expr {
-		plan2.EvalFoldExpr(proc, e, &exes)
-	}
-
 	reader, err := testutil.GetRelationReader(
 		ctx,
 		disttaeEngine,
 		txn,
 		relation,
-		expr,
+		nil,
 		mp,
 		t,
 	)
@@ -767,16 +745,13 @@ func Test_MultiTxnS3Tombstones(t *testing.T) {
 	ret := testutil.EmptyBatchFromSchema(schema)
 	cnt := 0
 	for {
-		done, err := reader.Read(ctx, ret.Attrs, expr[0], mp, ret)
+		done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
 		require.NoError(t, err)
 		cnt += ret.RowCount()
 
 		if done {
 			break
 		}
-
-		res := vector.MustFixedColWithTypeCheck[int32](ret.Vecs[0])
-		fmt.Printf("asdf %v", res)
 	}
 
 	require.Equal(t, 10, cnt)
