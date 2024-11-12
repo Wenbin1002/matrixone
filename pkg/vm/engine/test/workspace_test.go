@@ -1570,7 +1570,7 @@ func Test_BigDeleteWriteS3(t *testing.T) {
 	}
 }
 
-func Test_CNTransferTombstoneObjects2(t *testing.T) {
+func Test_CNTransferTombstoneObjects(t *testing.T) {
 	var (
 		opts         testutil.TestOptions
 		tableName    = "test1"
@@ -1600,15 +1600,6 @@ func Test_CNTransferTombstoneObjects2(t *testing.T) {
 	require.NotNil(t, rel)
 	require.NoError(t, cnTxnOp.Commit(ctx))
 
-	{
-		_, _, cnTxnOp, err = p.D.GetTable(ctx, databaseName, tableName)
-		require.NoError(t, err)
-
-		cnTxnOp.GetWorkspace().StartStatement()
-		err = cnTxnOp.GetWorkspace().IncrStatementID(ctx, false)
-		require.NoError(t, err)
-	}
-
 	bat := catalog2.MockBatch(schema, 20)
 	bats := bat.Split(2)
 
@@ -1634,6 +1625,15 @@ func Test_CNTransferTombstoneObjects2(t *testing.T) {
 
 			testutil2.CompactBlocks(t, 0, p.T.GetDB(), databaseName, schema, true)
 		}
+	}
+
+	{
+		_, _, cnTxnOp, err = p.D.GetTable(ctx, databaseName, tableName)
+		require.NoError(t, err)
+
+		cnTxnOp.GetWorkspace().StartStatement()
+		err = cnTxnOp.GetWorkspace().IncrStatementID(ctx, false)
+		require.NoError(t, err)
 	}
 
 	// read row id and pk data
@@ -1728,6 +1728,7 @@ func Test_CNTransferTombstoneObjects2(t *testing.T) {
 		for i := 0; i < 2; i++ {
 			if i == 1 {
 				expected = 0
+				ctx = context.WithValue(ctx, disttae.UT_ForceTransCheck{}, "yes")
 				require.NoError(t, cnTxnOp.Commit(ctx))
 			}
 

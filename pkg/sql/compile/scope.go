@@ -21,6 +21,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 
@@ -162,7 +170,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 	if s.DataSource == nil {
 		s.ScopeAnalyzer.Stop()
 		p = pipeline.NewMerge(s.RootOp)
-		_, err = p.MergeRun(s.Proc)
+		_, err = p.Run(s.Proc)
 	} else {
 		id := uint64(0)
 		if s.DataSource.TableDef != nil {
@@ -171,7 +179,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 		p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
 		if s.DataSource.isConst {
 			s.ScopeAnalyzer.Stop()
-			_, err = p.ConstRun(s.Proc)
+			_, err = p.Run(s.Proc)
 		} else {
 			if s.DataSource.R == nil {
 				s.NodeInfo.Data = engine.BuildEmptyRelData()
@@ -194,7 +202,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 			}
 
 			s.ScopeAnalyzer.Stop()
-			_, err = p.Run(s.DataSource.R, tag, s.Proc)
+			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
 	}
 	select {
@@ -245,7 +253,18 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 	}
 }
 
-// MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
+// MergeRun
+// case 1 :
+//
+//	specific run for Tp query without merge operator.
+//
+// case 2 :
+//
+//	normal merge run.
+//	1. start n goroutines from pool to run the pre-scope.
+//	2. send notify message to remote node for its data producer.
+//	3. run itself.
+//	4. listen to all running pipelines, once any error occurs, stop the NormalMergeRun asap.
 func (s *Scope) MergeRun(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -253,9 +272,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
+	// specific case.
 	if c.IsTpQuery() && !c.hasMergeOp {
-		lenPrescopes := len(s.PreScopes)
-		for i := lenPrescopes - 1; i >= 0; i-- {
+		for i := len(s.PreScopes) - 1; i >= 0; i-- {
 			err := s.PreScopes[i].MergeRun(c)
 			if err != nil {
 				return err
@@ -264,39 +283,49 @@ func (s *Scope) MergeRun(c *Compile) error {
 		return s.ParallelRun(c)
 	}
 
+	// Merge Run normally.
 	var wg sync.WaitGroup
 	preScopeResultReceiveChan := make(chan error, len(s.PreScopes))
+
+	// step 1.
 	for i := range s.PreScopes {
 		wg.Add(1)
-		scope := s.PreScopes[i]
-		errSubmit := ants.Submit(func() {
-			defer func() {
-				wg.Done()
-			}()
 
-			switch scope.Magic {
-			case Normal:
-				preScopeResultReceiveChan <- scope.Run(c)
-			case Merge, MergeInsert:
-				preScopeResultReceiveChan <- scope.MergeRun(c)
-			case Remote:
-				preScopeResultReceiveChan <- scope.RemoteRun(c)
-			default:
-				preScopeResultReceiveChan <- moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
-			}
-		})
-		if errSubmit != nil {
-			preScopeResultReceiveChan <- errSubmit
+		scope := s.PreScopes[i]
+
+		submitPreScope := ants.Submit(
+			func() {
+				switch scope.Magic {
+				case Normal:
+					preScopeResultReceiveChan <- scope.Run(c)
+				case Merge, MergeInsert:
+					preScopeResultReceiveChan <- scope.MergeRun(c)
+				case Remote:
+					preScopeResultReceiveChan <- scope.RemoteRun(c)
+				default:
+					err := moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
+					cleanPipelineWitchStartFail(scope, err, c.isPrepare)
+					preScopeResultReceiveChan <- err
+				}
+				wg.Done()
+			})
+
+		// build routine failed.
+		if submitPreScope != nil {
+			cleanPipelineWitchStartFail(scope, submitPreScope, c.isPrepare)
+			preScopeResultReceiveChan <- submitPreScope
 			wg.Done()
 		}
 	}
 
+	// step 2.
 	var notifyMessageResultReceiveChan chan notifyMessageResult
 	if len(s.RemoteReceivRegInfos) > 0 {
 		notifyMessageResultReceiveChan = make(chan notifyMessageResult, len(s.RemoteReceivRegInfos))
 		s.sendNotifyMessage(&wg, notifyMessageResultReceiveChan)
 	}
 
+	// step 3.
 	defer func() {
 		// should wait all the notify-message-routine and preScopes done.
 		wg.Wait()
@@ -309,9 +338,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 		// clean the notifyMessageResultReceiveChan to make sure all the rpc-sender can be closed.
 		for len(notifyMessageResultReceiveChan) > 0 {
 			result := <-notifyMessageResultReceiveChan
-			if result.sender != nil {
-				result.sender.close()
-			}
+			result.clean(s.Proc)
 		}
 	}()
 
@@ -327,7 +354,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 	// receive and check error from pre-scopes and remote scopes.
 	if remoteScopeCount == 0 {
 		for i := 0; i < preScopeCount; i++ {
-			if err := <-preScopeResultReceiveChan; err != nil {
+			if err = <-preScopeResultReceiveChan; err != nil {
 				return err
 			}
 		}
@@ -343,9 +370,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 			preScopeCount--
 
 		case result := <-notifyMessageResultReceiveChan:
-			if result.sender != nil {
-				result.sender.close()
-			}
+			result.clean(s.Proc)
 			if result.err != nil {
 				return result.err
 			}
@@ -358,6 +383,12 @@ func (s *Scope) MergeRun(c *Compile) error {
 	}
 }
 
+// cleanPipelineWitchStartFail is used to clean up the pipelines that has failed to start due to a certain reasons.
+func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
+	p := pipeline.New(0, nil, sp.RootOp)
+	p.Cleanup(sp.Proc, true, isPrepare, fail)
+}
+
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
@@ -366,9 +397,23 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
-	if !s.canRemote(c, true) {
+	if s.ipAddrMatch(c.addr) {
 		return s.MergeRun(c)
 	}
+	if err := s.holdAnyCannotRemoteOperator(); err != nil {
+		return err
+	}
+
+	// In fact, it's not a safe way to convert this pipeline to run at local.
+	//
+	// Just image this case,
+	// pipelineA holds an operator `dispatch d1`, d1 want to send data to pipelineB at node1.
+	// for this operator `d1`, it takes a remote-receiver (the pipelineB), and it will call a rpc for sending.
+	// but now, the pipelineB is not a remote-receiver but in local, the rpc will fail and the B cannot receive anything.
+	// This will cause a hung.
+	//
+	// we should avoid to generate this format pipeline, or do a suitable conversion for the dispatch operator,
+	// or refactor the dispatch operator for no need to know a receiver is local or remote.
 	if !checkPipelineStandaloneExecutableAtRemote(s) {
 		return s.MergeRun(c)
 	}
@@ -516,7 +561,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 
 func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	var err error
-	var inExprList []*plan.Expr
+	var runtimeInExprList []*plan.Expr
 	exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterSpecs))
 	filters := make([]message.RuntimeFilterMessage, 0, len(exprs))
 
@@ -542,7 +587,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 					return nil
 				case message.RuntimeFilter_IN:
 					inExpr := plan2.MakeInExpr(c.proc.Ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
-					inExprList = append(inExprList, inExpr)
+					runtimeInExprList = append(runtimeInExprList, inExpr)
 
 					// TODO: implement BETWEEN expression
 				}
@@ -553,15 +598,15 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	}
 
 	var appendNotPkFilter []*plan.Expr
-	for i := range inExprList {
-		fn := inExprList[i].GetF()
+	for i := range runtimeInExprList {
+		fn := runtimeInExprList[i].GetF()
 		col := fn.Args[0].GetCol()
 		if col == nil {
 			panic("only support col in runtime filter's left child!")
 		}
-		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Name == s.DataSource.TableDef.Pkey.PkeyColName
-		if !isFilterOnPK {
-			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(inExprList[i]))
+		pkPos := s.DataSource.TableDef.Name2ColIndex[s.DataSource.TableDef.Pkey.PkeyColName]
+		if pkPos != col.ColPos {
+			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(runtimeInExprList[i]))
 		}
 	}
 
@@ -583,8 +628,8 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	}
 
 	// reset datasource
-	if len(inExprList) > 0 {
-		newExprList := plan2.DeepCopyExprList(inExprList)
+	if len(runtimeInExprList) > 0 {
+		newExprList := plan2.DeepCopyExprList(runtimeInExprList)
 		if s.DataSource.FilterExpr != nil {
 			newExprList = append(newExprList, s.DataSource.FilterExpr)
 		}
@@ -604,13 +649,13 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			}
 		}
 
-		newExprList := plan2.DeepCopyExprList(inExprList)
+		newExprList := plan2.DeepCopyExprList(runtimeInExprList)
 		if len(s.DataSource.node.BlockFilterList) > 0 {
 			newExprList = append(newExprList, s.DataSource.BlockFilterList...)
 		}
 
-		crs := new(perfcounter.CounterSet)
-		relData, err := c.expandRanges(s.DataSource.node, s.DataSource.Rel, newExprList, crs)
+		counterSet := new(perfcounter.CounterSet)
+		relData, err := c.expandRanges(s.DataSource.node, newExprList, counterSet)
 		if err != nil {
 			return err
 		}
@@ -618,23 +663,28 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		ctx := c.proc.GetTopContext()
 		stats := statistic.StatsInfoFromContext(ctx)
 		stats.AddScopePrepareS3Request(statistic.S3Request{
-			List:      crs.FileService.S3.List.Load(),
-			Head:      crs.FileService.S3.Head.Load(),
-			Put:       crs.FileService.S3.Put.Load(),
-			Get:       crs.FileService.S3.Get.Load(),
-			Delete:    crs.FileService.S3.Delete.Load(),
-			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
+			List:      counterSet.FileService.S3.List.Load(),
+			Head:      counterSet.FileService.S3.Head.Load(),
+			Put:       counterSet.FileService.S3.Put.Load(),
+			Get:       counterSet.FileService.S3.Get.Load(),
+			Delete:    counterSet.FileService.S3.Delete.Load(),
+			DeleteMul: counterSet.FileService.S3.DeleteMulti.Load(),
 		})
 
 		//FIXME:: Do need to attache tombstones? No, because the scope runs on local CN
 		//relData.AttachTombstones()
 		s.NodeInfo.Data = relData
 
-	} else if len(inExprList) > 0 {
+	} else if len(runtimeInExprList) > 0 {
 		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.proc.Ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
 		if err != nil {
 			return err
 		}
+	}
+
+	err = s.aggOptimize(c)
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -705,12 +755,22 @@ type notifyMessageResult struct {
 	err    error
 }
 
+// clean do final work for a notifyMessageResult.
+func (r *notifyMessageResult) clean(proc *process.Process) {
+	if r.sender != nil {
+		r.sender.close()
+	}
+	if r.err != nil {
+		proc.Infof(proc.Ctx, "send notify message failed : %s", r.err)
+	}
+}
+
 // sendNotifyMessage create n routines to notify the remote nodes where their receivers are.
 // and keep receiving the data until the query was done or data is ended.
 func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMessageResult) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, s.Proc.Mp())
+		reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, err, s.Proc.Mp())
 
 		select {
 		case <-s.Proc.Ctx.Done():
@@ -768,8 +828,7 @@ func (s *Scope) sendNotifyMessage(wg *sync.WaitGroup, resultChan chan notifyMess
 		)
 
 		if errSubmit != nil {
-			resultChan <- notifyMessageResult{err: errSubmit, sender: nil}
-			wg.Done()
+			closeWithError(errSubmit, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 		}
 	}
 }
@@ -781,18 +840,19 @@ func receiveMsgAndForward(sender *messageSenderOnClient, forwardCh chan process.
 			return err
 		}
 
-		forwardCh <- process.NewPipelineSignalToDirectly(bat, sender.mp)
+		forwardCh <- process.NewPipelineSignalToDirectly(bat, nil, sender.mp)
 	}
 }
 
 func (s *Scope) replace(c *Compile) error {
+	dbName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.DbName
 	tblName := s.Plan.GetQuery().Nodes[0].ReplaceCtx.TableDef.Name
 	deleteCond := s.Plan.GetQuery().Nodes[0].ReplaceCtx.DeleteCond
 	rewriteFromOnDuplicateKey := s.Plan.GetQuery().Nodes[0].ReplaceCtx.RewriteFromOnDuplicateKey
 
 	delAffectedRows := uint64(0)
 	if deleteCond != "" {
-		result, err := c.runSqlWithResult(fmt.Sprintf("delete from %s where %s", tblName, deleteCond), NoAccountId)
+		result, err := c.runSqlWithResult(fmt.Sprintf("delete from `%s`.`%s` where %s", dbName, tblName, deleteCond), NoAccountId)
 		if err != nil {
 			return err
 		}
@@ -826,6 +886,88 @@ func removeStringBetween(s, start, end string) string {
 		startIndex = strings.Index(s, start)
 	}
 	return s
+}
+
+func (s *Scope) aggOptimize(c *Compile) error {
+	scanNode := s.DataSource.node
+	if scanNode != nil && len(scanNode.AggList) > 0 {
+		partialResults, partialResultTypes, columnMap := checkAggOptimize(scanNode)
+		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
+			rel, _, ctx, err := c.handleDbRelContext(scanNode)
+			if err != nil {
+				return err
+			}
+
+			newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)
+			blk := s.NodeInfo.Data.GetBlockInfo(0)
+			newRelData.AppendBlockInfo(&blk)
+
+			tombstones, err := collectTombstones(c, scanNode, rel)
+			if err != nil {
+				return err
+			}
+
+			fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
+			if err != nil {
+				return err
+			}
+			//For each blockinfo in relData, if blk has no tombstones, then compute the agg result,
+			//otherwise put it into newRelData.
+			var (
+				hasTombstone bool
+				err2         error
+			)
+			if err = engine.ForRangeBlockInfo(1, s.NodeInfo.Data.DataCnt(), s.NodeInfo.Data, func(blk *objectio.BlockInfo) (bool, error) {
+				if hasTombstone, err2 = tombstones.HasBlockTombstone(
+					ctx, &blk.BlockID, fs,
+				); err2 != nil {
+					return false, err2
+				} else if blk.IsAppendable() || hasTombstone {
+					newRelData.AppendBlockInfo(blk)
+					return true, nil
+				}
+				if c.evalAggOptimize(scanNode, blk, partialResults, partialResultTypes, columnMap) != nil {
+					partialResults = nil
+					return false, nil
+				}
+				return true, nil
+			}); err != nil {
+				return err
+			}
+			if partialResults != nil {
+				s.NodeInfo.Data = newRelData
+				//find the last mergegroup
+				mergeGroup := findMergeGroup(s.RootOp)
+				if mergeGroup != nil {
+					mergeGroup.PartialResults = partialResults
+					mergeGroup.PartialResultTypes = partialResultTypes
+				} else {
+					panic("can't find merge group operator for agg optimize!")
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// find scan->proj->group->mergegroup
+func findMergeGroup(op vm.Operator) *mergegroup.MergeGroup {
+	if op == nil {
+		return nil
+	}
+	if mergeGroup, ok := op.(*mergegroup.MergeGroup); ok {
+		child := op.GetOperatorBase().GetChildren(0)
+		if _, ok = child.(*group.Group); ok {
+			child = child.GetOperatorBase().GetChildren(0)
+			if _, ok = child.(*projection.Projection); ok {
+				child = child.GetOperatorBase().GetChildren(0)
+				if _, ok = child.(*table_scan.TableScan); ok {
+					return mergeGroup
+				}
+			}
+		}
+	}
+	return findMergeGroup(op.GetOperatorBase().GetChildren(0))
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {

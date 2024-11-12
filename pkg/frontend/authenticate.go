@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
-	"github.com/matrixorigin/matrixone/pkg/common/stage"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -56,6 +55,8 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/stage"
+	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -1137,7 +1138,7 @@ var (
 				creator,
 				owner,
 				default_role
-    		) values(%d,"%s","%s","%s","%s","%s",%s,"%s",%d,%d,%d);`
+    		) values(%d,"%s","%s","%s","%s","%s",%s, "%s",%d,%d,%d);`
 	initMoUserWithoutIDFormat = `insert into mo_catalog.mo_user(
 				user_host,
 				user_name,
@@ -1145,11 +1146,12 @@ var (
 				status,
 				created_time,
 				expired_time,
+				password_history,
 				login_type,
 				creator,
 				owner,
 				default_role
-    		) values("%s","%s","%s","%s","%s",%s,"%s",%d,%d,%d);`
+    		) values("%s", "%s", "%s", "%s", "%s", %s, '%s', "%s",%d, %d, %d);`
 	initMoRolePrivFormat = `insert into mo_catalog.mo_role_privs(
 				role_id,
 				role_name,
@@ -1184,9 +1186,25 @@ const (
 
 	deletePitrFromMoPitrFormat = `delete from mo_catalog.mo_pitr where create_account = %d;`
 
-	getPasswordOfUserFormat = `select user_id,authentication_string,default_role from mo_catalog.mo_user where user_name = "%s" order by user_id;`
+	getPasswordOfUserFormat = `select user_id, authentication_string, default_role from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
-	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" where user_name = "%s" order by user_id;`
+	getLockInfoOfUserFormat = `select status, login_attempts, lock_time from mo_catalog.mo_user where user_name = "%s" order by user_id;`
+
+	getExpiredTimeOfUserFormat = `select password_last_changed from mo_catalog.mo_user where user_name = "%s" order by user_id;`
+
+	getPasswordHistotyOfUsrFormat = `select password_history from mo_catalog.mo_user where user_name = "%s";`
+
+	updatePasswordHistoryOfUserFormat = `update mo_catalog.mo_user set password_history = '%s' where user_name = "%s";`
+
+	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" , password_last_changed = utc_timestamp() where user_name = "%s" order by user_id;`
+
+	updateStatusUnlockOfUserFormat = `update mo_catalog.mo_user set status = "%s", login_attempts = 0 where user_name = "%s" order by user_id;`
+
+	updateLoginAttemptsOfUserFormat = `update mo_catalog.mo_user set login_attempts = login_attempts + 1  where user_name = "%s";`
+
+	updateLockTimeOfUserFormat = `update mo_catalog.mo_user set lock_time = utc_timestamp() where user_name = "%s";`
+
+	updateStatusLockOfUserFormat = `update mo_catalog.mo_user set status = "%s", login_attempts = login_attempts + 1, lock_time = utc_timestamp() where user_name = "%s";`
 
 	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
@@ -1630,12 +1648,44 @@ func getSqlForPasswordOfUser(ctx context.Context, user string) (string, error) {
 	return fmt.Sprintf(getPasswordOfUserFormat, user), nil
 }
 
+func getPasswordHistotyOfUserSql(user string) string {
+	return fmt.Sprintf(getPasswordHistotyOfUsrFormat, user)
+}
+
+func getLockInfoOfUserSql(user string) string {
+	return fmt.Sprintf(getLockInfoOfUserFormat, user)
+}
+
+func getExpiredTimeOfUserSql(user string) string {
+	return fmt.Sprintf(getExpiredTimeOfUserFormat, user)
+}
+
+func getSqlForUpdatePasswordHistoryOfUser(passwordHistory, user string) string {
+	return fmt.Sprintf(updatePasswordHistoryOfUserFormat, passwordHistory, user)
+}
+
 func getSqlForUpdatePasswordOfUser(ctx context.Context, password, user string) (string, error) {
 	err := inputNameIsInvalid(ctx, user)
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf(updatePasswordOfUserFormat, password, user), nil
+}
+
+func getSqlForUpdateUnlcokStatusOfUser(status, user string) string {
+	return fmt.Sprintf(updateStatusUnlockOfUserFormat, status, user)
+}
+
+func getSqlForUpdateLoginAttemptsOfUser(user string) string {
+	return fmt.Sprintf(updateLoginAttemptsOfUserFormat, user)
+}
+
+func getSqlForUpdateLockTimeOfUser(user string) string {
+	return fmt.Sprintf(updateLockTimeOfUserFormat, user)
+}
+
+func getSqlForUpdateStatusLockOfUser(status, user string) string {
+	return fmt.Sprintf(updateStatusLockOfUserFormat, status, user)
 }
 
 func getSqlForCheckRoleExists(ctx context.Context, roleID int, roleName string) (string, error) {
@@ -2047,6 +2097,8 @@ type privilege struct {
 	clusterTableOperation clusterTableOperationType
 	//can execute in restricted status
 	canExecInRestricted bool
+	//can execute in password expired status
+	canExecInPasswordExpired bool
 }
 
 func (p *privilege) objectType() objectType {
@@ -2654,10 +2706,16 @@ type user struct {
 }
 
 func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
-	var sql string
-	var vr *verifiedRole
-	var erArray []ExecResult
-	var encryption string
+	var (
+		sql           string
+		vr            *verifiedRole
+		erArray       []ExecResult
+		encryption    string
+		needValid     bool
+		userName      string
+		isAlterUnlock bool
+	)
+
 	account := ses.GetTenantInfo()
 	currentUser := account.GetUser()
 
@@ -2665,9 +2723,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	if au.Role != nil {
 		return moerr.NewInternalError(ctx, "not support alter role")
 	}
-	if au.MiscOpt != nil {
-		return moerr.NewInternalError(ctx, "not support password or lock operation")
-	}
+
 	if au.CommentOrAttribute.Exist {
 		return moerr.NewInternalError(ctx, "not support alter comment or attribute")
 	}
@@ -2676,18 +2732,17 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	}
 	user := au.Users[0]
 
+	if au.MiscOpt != nil {
+		if _, ok := au.MiscOpt.(*tree.UserMiscOptionAccountUnlock); ok {
+			isAlterUnlock = true
+		} else {
+			return moerr.NewInternalError(ctx, "not support password or lock operation")
+		}
+	}
+
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	userName, err := normalizeName(ctx, user.Username)
-	if err != nil {
-		return err
-	}
-	hostName := user.Hostname
-	password := user.IdentStr
-	if len(password) == 0 {
-		return moerr.NewInternalError(ctx, "password is empty string")
-	}
 	//put it into the single transaction
 	err = bh.Exec(ctx, "begin")
 	defer func() {
@@ -2697,13 +2752,11 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		return err
 	}
 
-	if !user.AuthExist {
-		return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', alter Auth is nil", userName, hostName)
+	userName, err = normalizeName(ctx, user.Username)
+	if err != nil {
+		return err
 	}
-
-	if user.IdentTyp != tree.AccountIdentifiedByPassword {
-		return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', only support alter Auth by identified by", userName, hostName)
-	}
+	hostName := user.Hostname
 
 	//check the user exists or not
 	sql, err = getSqlForPasswordOfUser(ctx, userName)
@@ -2749,29 +2802,70 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		return err
 	}
 
-	//encryption the password
-	encryption = HashPassWord(password)
+	if !isAlterUnlock {
+		password := user.IdentStr
+		// check password
+		if len(password) == 0 {
+			return moerr.NewInternalError(ctx, "password is empty string")
+		}
 
-	if execResultArrayHasData(erArray) || getPu(ses.GetService()).SV.SkipCheckPrivilege {
-		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
+		needValid, err = needValidatePwd(ses)
 		if err != nil {
 			return err
 		}
-		err = bh.Exec(ctx, sql)
+		if needValid {
+			err = validatePwd(ctx, password, ses, userName, ses.GetUserName())
+			if err != nil {
+				return err
+			}
+		}
+
+		//encryption the password
+		encryption = HashPassWord(password)
+
+		err = checkPasswordReusePolicy(ctx, ses, bh, encryption, userName)
 		if err != nil {
 			return err
+		}
+
+		if execResultArrayHasData(erArray) || getPu(ses.GetService()).SV.SkipCheckPrivilege {
+			sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
+			if err != nil {
+				return err
+			}
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				return err
+			}
+		} else {
+			if currentUser != userName {
+				return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
+			}
+			sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
+			if err != nil {
+				return err
+			}
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				return err
+			}
 		}
 	} else {
-		if currentUser != userName {
-			return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
-		}
-		sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
-		if err != nil {
-			return err
-		}
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
+		if execResultArrayHasData(erArray) || getPu(ses.GetService()).SV.SkipCheckPrivilege {
+			sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				return err
+			}
+		} else {
+			if currentUser != userName {
+				return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
+			}
+			sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return err
@@ -3336,7 +3430,7 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 	filePath = ep.FilePath
 	if strings.HasPrefix(filePath, stage.STAGE_PROTOCOL+"://") {
 		// stage:// URL
-		s, err := stage.UrlToStageDef(filePath, ses.proc)
+		s, err := stageutil.UrlToStageDef(filePath, ses.proc)
 		if err != nil {
 			return err
 		}
@@ -4063,7 +4157,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 	}
 
 	// authticate db exists
-	dbExists, err = checkDatabaseExistsOrNot(ctx, ses.GetBackgroundExec(ctx), dbName)
+	dbExists, err = checkDatabaseExistsOrNot(ctx, bh, dbName)
 	if err != nil {
 		return err
 	}
@@ -5091,6 +5185,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	special := specialTagNone
 	objType := objectTypeAccount
 	canExecInRestricted := false
+	canExecInPasswordExpired := false
 	var extraEntries []privilegeEntry
 	writeDatabaseAndTableDirectly := false
 	var clusterTable bool
@@ -5141,6 +5236,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeDropUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership*/)
 	case *tree.AlterUser:
 		typs = append(typs, PrivilegeTypeAlterUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership*/)
+		canExecInPasswordExpired = true
 	case *tree.CreateRole:
 		typs = append(typs, PrivilegeTypeCreateRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.DropRole:
@@ -5496,6 +5592,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		isClusterTable:                clusterTable,
 		clusterTableOperation:         clusterTableOperation,
 		canExecInRestricted:           canExecInRestricted,
+		canExecInPasswordExpired:      canExecInPasswordExpired,
 	}
 }
 
@@ -5618,6 +5715,19 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 							databaseName:          objRef.GetSchemaName(),
 							tableName:             objRef.GetObjName(),
 							isClusterTable:        node.DeleteCtx.IsClusterTable,
+							clusterTableOperation: clusterTableModify,
+						})
+					}
+				}
+			} else if node.NodeType == plan.Node_MULTI_UPDATE {
+				for _, updateCtx := range node.UpdateCtxList {
+					if !isIndexTable(updateCtx.ObjRef.GetObjName()) {
+						isClusterTable := updateCtx.TableDef.TableType == catalog.SystemClusterRel
+						appendPt(privilegeTips{
+							typ:                   t,
+							databaseName:          updateCtx.ObjRef.GetSchemaName(),
+							tableName:             updateCtx.ObjRef.GetObjName(),
+							isClusterTable:        isClusterTable,
 							clusterTableOperation: clusterTableModify,
 						})
 					}
@@ -7476,6 +7586,7 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			status = tree.AccountStatusSuspend.String()
 		}
 	}
+
 	//the first user id in the general tenant
 	initMoUser1 := fmt.Sprintf(initMoUserFormat, newTenant.GetUserID(), rootHost, name, encryption, status,
 		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
@@ -7661,6 +7772,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 	var newRoleId int64
 	var status string
 	var sql string
+	var userName string
 	var mp *mpool.MPool
 
 	for _, u := range cu.Users {
@@ -7806,13 +7918,47 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 			return moerr.NewInternalError(ctx, "only support password verification now")
 		}
 
+		userName, err = normalizeName(ctx, user.Username)
+		if err != nil {
+			return err
+		}
 		password := user.IdentStr
 		if len(password) == 0 {
 			return moerr.NewInternalError(ctx, "password is empty string")
 		}
 
+		var needValidate bool
+		needValidate, err = needValidatePwd(ses)
+		if err != nil {
+			return err
+		}
+		if needValidate {
+			err = validatePwd(ctx, password, ses, userName, ses.GetUserName())
+			if err != nil {
+				return err
+			}
+		}
+
 		//encryption the password
 		encryption := HashPassWord(password)
+
+		var needSaveHistory bool
+		var passwordHistory []byte
+		needSaveHistory, err = whetherSavePasswordHistory(ses)
+		if err != nil {
+			return err
+		}
+		if needSaveHistory {
+			passwordHistory, err = generateSinglePasswordRecod(encryption)
+			if err != nil {
+				return err
+			}
+		} else {
+			passwordHistory, err = generageEmptyPasswordRecord()
+			if err != nil {
+				return err
+			}
+		}
 
 		//TODO: get comment or attribute. there is no field in mo_user to store it.
 		host = user.Hostname
@@ -7820,7 +7966,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 			host = rootHost
 		}
 		initMoUser1 := fmt.Sprintf(initMoUserWithoutIDFormat, host, user.Username, encryption, status,
-			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
+			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, string(passwordHistory), rootLoginType,
 			tenant.GetUserID(), tenant.GetDefaultRoleID(), newRoleId)
 
 		bh.ClearExecResultSet()
@@ -8032,17 +8178,17 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		dbName = string(cf.Name.Name.SchemaName)
 	}
 
+	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	defer bh.Close()
+
 	// authticate db exists
-	dbExists, err = checkDatabaseExistsOrNot(execCtx.reqCtx, ses.GetBackgroundExec(execCtx.reqCtx), dbName)
+	dbExists, err = checkDatabaseExistsOrNot(execCtx.reqCtx, bh, dbName)
 	if err != nil {
 		return err
 	}
 	if !dbExists {
 		return moerr.NewBadDB(execCtx.reqCtx, dbName)
 	}
-
-	bh := ses.GetBackgroundExec(execCtx.reqCtx)
-	defer bh.Close()
 
 	// format return type
 	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))

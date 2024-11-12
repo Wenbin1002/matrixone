@@ -199,7 +199,7 @@ func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 		destVec := mergeBlock.container.mp[int(tblIdx[idx])].Vecs[1]
 
 		if needLoad {
-			crs := new(perfcounter.CounterSet)
+			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
 			// comes from old version cn
@@ -290,6 +290,6 @@ func (mergeBlock *MergeBlock) cleanMp(proc *process.Process) {
 	mergeBlock.container.mp2 = nil
 }
 
-func (mergeBlock *MergeBlock) AffectedRows() uint64 {
+func (mergeBlock *MergeBlock) GetAffectedRows() uint64 {
 	return mergeBlock.container.affectedRows
 }

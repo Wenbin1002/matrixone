@@ -23,8 +23,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -44,9 +42,11 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // CnServerMessageHandler receive and deal the message from cn-client.
@@ -91,6 +91,9 @@ func CnServerMessageHandler(
 	if !ok {
 		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
 		panic("cn server receive a message with unexpected type")
+	}
+	if msg.DebugMsg != "" {
+		logutil.Infof("%s, goRoutineId=%d", msg.GetDebugMsg(), goroutine.GetRoutineId())
 	}
 
 	// prepare the receiver structure, just for easy using the `send` method.
@@ -141,12 +144,13 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 		// todo : the timeout should be removed.
 		//		but I keep it here because I don't know whether it will cause hung sometimes.
-		timeLimit, cancel := context.WithTimeout(context.TODO(), HandleNotifyTimeout)
+		timeLimit, cancel := context.WithTimeoutCause(context.TODO(), HandleNotifyTimeout, moerr.CauseHandlePipelineMessage)
 
 		succeed := false
 		select {
 		case <-timeLimit.Done():
 			err = moerr.NewInternalError(receiver.messageCtx, "send notify msg to dispatch operator timeout")
+			err = moerr.AttachCause(timeLimit, err)
 		case dispatchNotifyCh <- infoToDispatchOperator:
 			succeed = true
 		case <-receiver.connectionCtx.Done():
@@ -155,13 +159,13 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		cancel()
 
 		if err != nil || !succeed {
-			dispatchProc.Cancel()
+			dispatchProc.Cancel(err)
 			return err
 		}
 
 		select {
 		case <-receiver.connectionCtx.Done():
-			dispatchProc.Cancel()
+			dispatchProc.Cancel(err)
 
 		// there is no need to check the dispatchProc.Ctx.Done() here.
 		// because we need to receive the error from dispatchProc.DispatchNotifyCh.
@@ -522,14 +526,15 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 }
 
 func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID, timeout time.Duration) (*process.Process, process.RemotePipelineInformationChannel, error) {
-	tout, tcancel := context.WithTimeout(context.Background(), timeout)
+	tout, tcancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseGetProcByUuid)
 
 	for {
 		select {
 		case <-tout.Done():
 			colexec.Get().GetProcByUuid(uid, true)
+			err := moerr.AttachCause(tout, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout"))
 			tcancel()
-			return nil, nil, moerr.NewInternalError(receiver.messageCtx, "get dispatch process by uuid timeout")
+			return nil, nil, err
 
 		case <-receiver.connectionCtx.Done():
 			colexec.Get().GetProcByUuid(uid, true)

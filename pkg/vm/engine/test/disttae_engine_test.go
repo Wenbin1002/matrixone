@@ -1052,6 +1052,14 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
 	defer p.Close()
 	tae := p.T.GetDB()
+	fault.Enable()
+	defer fault.Disable()
+	rmFault, err := objectio.InjectLog1(
+		"mo_account",
+		2,
+	)
+	require.NoError(t, err)
+	defer rmFault()
 
 	schema := catalog2.MockSchemaAll(5, 1)
 	schema.Name = "mo_account"
@@ -1072,7 +1080,7 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	exec := v.(executor.SQLExecutor)
 
 	txnop = p.StartCNTxn()
-	_, err := exec.Exec(p.Ctx, "delete from db.mo_account where mock_1 in (0, 1)", executor.Options{}.WithTxn(txnop))
+	_, err = exec.Exec(p.Ctx, "delete from db.mo_account where mock_1 in (0, 1)", executor.Options{}.WithTxn(txnop))
 	require.NoError(t, err)
 	require.NoError(t, txnop.Commit(p.Ctx))
 
@@ -1115,4 +1123,28 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 		pkSum += vector.GetFixedAtWithTypeCheck[int16](res.Batches[0].Vecs[1], i)
 	}
 	require.Equal(t, int16(5 /*2+3*/), pkSum)
+}
+
+func TestCache3Tables(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	txnop := p.StartCNTxn()
+	dbname, tname, rel, err := p.D.Engine.GetRelationById(p.Ctx, txnop, catalog.MO_DATABASE_ID)
+	require.NoError(t, err)
+	require.Equal(t, catalog.MO_CATALOG, dbname)
+	require.Equal(t, catalog.MO_DATABASE, tname)
+	require.NotNil(t, rel)
+
+	dbname, tname, rel, err = p.D.Engine.GetRelationById(p.Ctx, txnop, catalog.MO_TABLES_ID)
+	require.NoError(t, err)
+	require.Equal(t, catalog.MO_CATALOG, dbname)
+	require.Equal(t, catalog.MO_TABLES, tname)
+	require.NotNil(t, rel)
+
+	dbname, tname, rel, err = p.D.Engine.GetRelationById(p.Ctx, txnop, catalog.MO_COLUMNS_ID)
+	require.NoError(t, err)
+	require.Equal(t, catalog.MO_CATALOG, dbname)
+	require.Equal(t, catalog.MO_COLUMNS, tname)
+	require.NotNil(t, rel)
 }

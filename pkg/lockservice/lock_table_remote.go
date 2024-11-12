@@ -116,7 +116,7 @@ func (l *remoteLockTable) lock(
 	// encounter any error, we need try to check bind is valid.
 	// And use origin error to return, because once handlerError
 	// swallows the error, the transaction will not be abort.
-	_ = l.handleError(txn.txnID, err, true)
+	_ = l.handleError(err, true)
 	cb(pb.Result{}, err)
 }
 
@@ -127,7 +127,6 @@ func (l *remoteLockTable) unlock(
 	mutations ...pb.ExtraMutation) {
 	logUnlockTableOnRemote(
 		l.logger,
-		l.serviceID,
 		txn,
 		l.bind,
 	)
@@ -139,7 +138,6 @@ func (l *remoteLockTable) unlock(
 
 		logUnlockTableOnRemoteFailed(
 			l.logger,
-			l.serviceID,
 			txn,
 			l.bind,
 			err,
@@ -150,7 +148,7 @@ func (l *remoteLockTable) unlock(
 		// handleError returns nil meaning bind changed, then all locks
 		// will be released. If handleError returns any error, it means
 		// that the current bind is valid, retry unlock.
-		if err := l.handleError(txn.txnID, err, false); err == nil {
+		if err := l.handleError(err, false); err == nil {
 			return
 		}
 	}
@@ -171,7 +169,7 @@ func (l *remoteLockTable) getLock(
 		}
 
 		// why use loop is similar to unlock
-		if err = l.handleError(txn.TxnID, err, false); err == nil {
+		if err = l.handleError(err, false); err == nil {
 			return
 		}
 	}
@@ -181,7 +179,7 @@ func (l *remoteLockTable) doUnlock(
 	txn *activeTxn,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) error {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseDoUnlock)
 	defer cancel()
 
 	req := acquireRequest()
@@ -198,11 +196,11 @@ func (l *remoteLockTable) doUnlock(
 		defer releaseResponse(resp)
 		return l.maybeHandleBindChanged(resp)
 	}
-	return err
+	return moerr.AttachCause(ctx, err)
 }
 
 func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseDoGetLock)
 	defer cancel()
 
 	req := acquireRequest()
@@ -235,7 +233,7 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 		}
 		return lock, true, nil
 	}
-	return Lock{}, false, err
+	return Lock{}, false, moerr.AttachCause(ctx, err)
 }
 
 func (l *remoteLockTable) getBind() pb.LockTable {
@@ -246,7 +244,10 @@ func (l *remoteLockTable) close() {
 	logLockTableClosed(l.logger, l.bind, true)
 }
 
-func (l *remoteLockTable) handleError(txnID []byte, err error, mustHandleLockBindChangedErr bool) error {
+func (l *remoteLockTable) handleError(
+	err error,
+	mustHandleLockBindChangedErr bool,
+) error {
 	oldError := err
 	// ErrLockTableBindChanged error must already handled. Skip
 	if !mustHandleLockBindChangedErr && moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {

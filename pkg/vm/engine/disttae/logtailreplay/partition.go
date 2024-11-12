@@ -16,11 +16,11 @@ package logtailreplay
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
@@ -34,13 +34,6 @@ type Partition struct {
 	// assuming checkpoints will be consumed once
 	checkpointConsumed atomic.Bool
 
-	//current partitionState can serve snapshot read only if start <= ts <= end
-	mu struct {
-		sync.Mutex
-		start types.TS
-		end   types.TS
-	}
-
 	TableInfo   TableInfo
 	TableInfoOK bool
 }
@@ -49,13 +42,6 @@ type TableInfo struct {
 	ID            uint64
 	Name          string
 	PrimarySeqnum int
-}
-
-// PXU TODO
-func (p *Partition) CanServe(ts types.TS) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return ts.GE(&p.mu.start) && ts.LE(&p.mu.end)
 }
 
 func NewPartition(
@@ -67,7 +53,6 @@ func NewPartition(
 	ret := &Partition{
 		lock: lock,
 	}
-	ret.mu.start = types.MaxTs()
 	ret.state.Store(NewPartitionState(service, false, id))
 	return ret
 }
@@ -83,6 +68,11 @@ func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error 
 func (p *Partition) MutateState() (*PartitionState, func()) {
 	curState := p.state.Load()
 	state := curState.Copy()
+	//TODO::Remove the debug info for issue-19867
+	if p.TableInfo.Name == "mo_database" {
+		logutil.Infof("MutateState:table name:%s, mutate partition state from %p to %p",
+			p.TableInfo.Name, curState, state)
+	}
 	return state, func() {
 		if !p.state.CompareAndSwap(curState, state) {
 			panic("concurrent mutation")
@@ -101,40 +91,6 @@ func (p *Partition) Lock(ctx context.Context) error {
 
 func (p *Partition) Unlock() {
 	p.lock <- struct{}{}
-}
-
-func (p *Partition) IsValid() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.mu.start.LE(&p.mu.end)
-}
-
-func (p *Partition) IsEmpty() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.mu.start == types.MaxTs()
-}
-
-func (p *Partition) UpdateStart(ts types.TS) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.mu.start != types.MaxTs() {
-		p.mu.start = ts
-	}
-}
-
-// [start, end]
-func (p *Partition) UpdateDuration(start types.TS, end types.TS) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.mu.start = start
-	p.mu.end = end
-}
-
-func (p *Partition) GetDuration() (types.TS, types.TS) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.mu.start, p.mu.end
 }
 
 func (p *Partition) ConsumeSnapCkps(
@@ -185,8 +141,8 @@ func (p *Partition) ConsumeSnapCkps(
 		//only one global checkpoint.
 		end = start
 	}
-	p.UpdateDuration(start, end)
-	if !p.IsValid() {
+	state.UpdateDuration(start, end)
+	if !state.IsValid() {
 		return moerr.NewInternalErrorNoCtx("invalid checkpoints duration")
 	}
 	return nil
@@ -206,9 +162,9 @@ func (p *Partition) ConsumeCheckpoints(
 	if p.checkpointConsumed.Load() {
 		return nil
 	}
+
 	curState := p.state.Load()
 	if len(curState.checkpoints) == 0 {
-		p.UpdateDuration(types.TS{}, types.MaxTs())
 		return nil
 	}
 
@@ -220,17 +176,15 @@ func (p *Partition) ConsumeCheckpoints(
 
 	curState = p.state.Load()
 	if len(curState.checkpoints) == 0 {
-		p.UpdateDuration(types.TS{}, types.MaxTs())
 		return nil
 	}
 
 	state := curState.Copy()
 
+	//consume checkpoints.
 	if err := state.consumeCheckpoints(fn); err != nil {
 		return err
 	}
-
-	p.UpdateDuration(state.start, types.MaxTs())
 
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")
@@ -256,6 +210,9 @@ func (p *Partition) Truncate(ctx context.Context, ids [2]uint64, ts types.TS) er
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")
 	}
+
+	logutil.Infof("Truncate:table name:%s,tid:%v partition state from %p to %p,startTs:%s",
+		p.TableInfo.Name, p.TableInfo.ID, curState, state, ts.ToString())
 
 	return nil
 }

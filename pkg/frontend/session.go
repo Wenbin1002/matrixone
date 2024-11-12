@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"runtime"
 	"strings"
 	"sync"
@@ -260,9 +261,9 @@ func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
 	return &ses.mysqlParser
 }
 
-func (ses *Session) InitSystemVariables(ctx context.Context) (err error) {
+func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) (err error) {
 	var sv *SystemVariables
-	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx); err != nil {
+	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx, bh); err != nil {
 		return
 	}
 	ses.mu.Lock()
@@ -1105,16 +1106,31 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 
 // AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
 func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool) ([]byte, error) {
-	var defaultRoleID int64
-	var defaultRole string
-	var tenant *TenantInfo
-	var err error
-	var rsset []ExecResult
-	var tenantID int64
-	var userID int64
-	var pwd, accountStatus string
-	var accountVersion uint64
-	var createVersion string
+	var (
+		defaultRoleID        int64
+		defaultRole          string
+		sqlForCheckTenant    string
+		sqlForPasswordOfUser string
+		tenant               *TenantInfo
+		err                  error
+		rsset                []ExecResult
+		userRsset            []ExecResult
+		tenantID             int64
+		userID               int64
+		pwd, accountStatus   string
+		psw                  []byte
+		accountVersion       uint64
+		createVersion        string
+		lastChangedTime      string
+		defPwdLife           int
+		userStatus           string
+		loginAttempts        uint64
+		lockTime             string
+		lockTimeExpired      bool
+		needCheckLock        bool
+		maxLoginAttempts     int64
+		needCheckHost        bool
+	)
 
 	//Get tenant info
 	tenant, err = GetTenantInfo(ctx, userInput)
@@ -1135,15 +1151,27 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
 
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
 	//step1 : check tenant exists or not in SYS tenant context
 	ses.timestampMap[TSCheckTenantStart] = time.Now()
 	sysTenantCtx := defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
-	sqlForCheckTenant, err := getSqlForCheckTenant(sysTenantCtx, tenant.GetTenant())
+
+	err = bh.Exec(sysTenantCtx, "begin;")
+	defer func() {
+		err = finishTxn(sysTenantCtx, bh, err)
+	}()
+	if err != nil {
+		return nil, err
+	}
+
+	sqlForCheckTenant, err = getSqlForCheckTenant(sysTenantCtx, tenant.GetTenant())
 	if err != nil {
 		return nil, err
 	}
 	ses.Debugf(ctx, "check tenant %s exists", tenant)
-	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, ses, sqlForCheckTenant)
+	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, bh, sqlForCheckTenant)
 	if err != nil {
 		return nil, err
 	}
@@ -1198,31 +1226,31 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 
 	ses.Debugf(tenantCtx, "check user of %s exists", tenant)
 	//Get the password of the user in an independent session
-	sqlForPasswordOfUser, err := getSqlForPasswordOfUser(tenantCtx, tenant.GetUser())
+	sqlForPasswordOfUser, err = getSqlForPasswordOfUser(tenantCtx, tenant.GetUser())
 	if err != nil {
 		return nil, err
 	}
-	rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sqlForPasswordOfUser)
+	userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sqlForPasswordOfUser)
 	if err != nil {
 		return nil, err
 	}
-	if !execResultArrayHasData(rsset) {
+	if !execResultArrayHasData(userRsset) {
 		return nil, moerr.NewInternalErrorf(tenantCtx, "there is no user %s", tenant.GetUser())
 	}
 
-	userID, err = rsset[0].GetInt64(tenantCtx, 0, 0)
+	userID, err = userRsset[0].GetInt64(tenantCtx, 0, 0)
 	if err != nil {
 		return nil, err
 	}
 
-	pwd, err = rsset[0].GetString(tenantCtx, 0, 1)
+	pwd, err = userRsset[0].GetString(tenantCtx, 0, 1)
 	if err != nil {
 		return nil, err
 	}
 
 	//the default_role in the mo_user table.
 	//the default_role is always valid. public or other valid role.
-	defaultRoleID, err = rsset[0].GetInt64(tenantCtx, 0, 2)
+	defaultRoleID, err = userRsset[0].GetInt64(tenantCtx, 0, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -1251,7 +1279,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if err != nil {
 			return nil, err
 		}
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sqlForCheckRoleExists)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sqlForCheckRoleExists)
 		if err != nil {
 			return nil, err
 		}
@@ -1266,7 +1294,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		if err != nil {
 			return nil, err
 		}
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sqlForRoleOfUser)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sqlForRoleOfUser)
 		if err != nil {
 			return nil, err
 		}
@@ -1287,7 +1315,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		ses.Debugf(tenantCtx, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
-		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, sql)
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, bh, sql)
 		if err != nil {
 			return nil, err
 		}
@@ -1304,25 +1332,145 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
 	}
 	//------------------------------------------------------------------------------------------------------------------
-	psw, err := GetPassWord(pwd)
+	psw, err = GetPassWord(pwd)
 	if err != nil {
 		return nil, err
 	}
 
 	// TO Check password
-	if checkPassword(psw, salt, authResponse) {
-		ses.Debug(tenantCtx, "check password succeeded")
-		if err = ses.InitSystemVariables(ctx); err != nil {
+	if err = ses.InitSystemVariables(tenantCtx, bh); err != nil {
+		return nil, err
+	}
+
+	// check if the host is allowed to connect
+	needCheckHost, err = whetherNeedToCheckIp(ses)
+	if err != nil {
+		return nil, err
+	}
+
+	if needCheckHost {
+		ses.Infof(tenantCtx, "check client address %s", ses.clientAddr)
+		err = whetherValidIpInInvitedNodes(tenantCtx, ses, ses.clientAddr)
+		if err != nil {
 			return nil, err
 		}
+	}
+
+	needCheckLock, err = whetherNeedCheckLoginAttempts(tenantCtx, ses)
+	if err != nil {
+		return nil, err
+	}
+	if needCheckLock {
+		// get user status, login_attempts, lock_time
+		userLockInfoSql := getLockInfoOfUserSql(tenant.GetUser())
+		userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userLockInfoSql)
+		if err != nil {
+			return nil, err
+		}
+		userStatus, err = userRsset[0].GetString(tenantCtx, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+
+		loginAttempts, err = userRsset[0].GetUint64(tenantCtx, 0, 1)
+		if err != nil {
+			return nil, err
+		}
+
+		lockTime, err = userRsset[0].GetString(tenantCtx, 0, 2)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	/*
+		if user lock status is locked
+		check if the lock_time is not expired
+	*/
+	if needCheckLock && userStatus == userStatusLock {
+		if lockTimeExpired, err = checkLockTimeExpired(tenantCtx, ses, lockTime); err != nil {
+			return nil, err
+		}
+
+		if !lockTimeExpired {
+			return nil, moerr.NewInternalError(tenantCtx, "user is locked, please try again later")
+		}
+	}
+
+	// make update user login info in one transaction
+
+	if checkPassword(psw, salt, authResponse) {
+		ses.Debug(tenantCtx, "check password succeeded")
+		if !isSuperUser(tenant.GetUser()) {
+			// check password expired
+			var expired bool
+
+			defPwdLife, err = whetherNeedCheckExpired(tenantCtx, ses)
+			if err != nil {
+				return nil, err
+			}
+
+			if defPwdLife > 0 {
+				userExpiredSql := getExpiredTimeOfUserSql(tenant.GetUser())
+				userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userExpiredSql)
+				if err != nil {
+					return nil, err
+				}
+				lastChangedTime, err = userRsset[0].GetString(tenantCtx, 0, 0)
+				if err != nil {
+					return nil, err
+				}
+				expired, err = checkPasswordExpired(defPwdLife, lastChangedTime)
+				if err != nil {
+					return nil, err
+				}
+				if expired {
+					ses.getRoutine().setExpired(true)
+				}
+			}
+
+			if needCheckLock && userStatus == userStatusLock {
+				// if user lock status is locked, update status to unlock
+				if err = setUserUnlock(tenantCtx, tenant.GetUser(), bh); err != nil {
+					return nil, err
+				}
+			}
+		}
+
 	} else {
+		if !isSuperUser(tenant.GetUser()) && needCheckLock {
+			if userStatus != userStatusLock {
+				loginAttempts++
+				if maxLoginAttempts, err = getLoginAttempts(tenantCtx, ses); err != nil {
+					return nil, err
+				}
+				if int64(loginAttempts) >= maxLoginAttempts {
+					// if login attempts is greater than max login attempts, update user status to lock
+					if err = setUserLock(tenantCtx, tenant.GetUser(), bh); err != nil {
+						return nil, err
+					}
+				} else {
+					// if login attempts is less than max login attempts, update login_attempts
+					if err = increaseLoginAttempts(tenantCtx, tenant.GetUser(), bh); err != nil {
+						return nil, err
+					}
+				}
+
+			} else {
+				// if user lock status is locked, update lock_time to now
+				if err = updateLockTime(tenantCtx, tenant.GetUser(), bh); err != nil {
+					return nil, err
+				}
+			}
+		}
+
 		return nil, moerr.NewInternalError(tenantCtx, "check password failed")
 	}
 
 	// If the login information contains the database name, verify if the database exists
 	if dbName != "" {
 		ses.timestampMap[TSCheckDbNameStart] = time.Now()
-		_, err = executeSQLInBackgroundSession(tenantCtx, ses, "use `"+dbName+"`")
+		_, err = executeSQLInBackgroundSession(tenantCtx, bh, "use `"+dbName+"`")
 		if err != nil {
 			return nil, err
 		}
@@ -1353,7 +1501,7 @@ func (ses *Session) UpgradeTenant(ctx context.Context, tenantName string, retryC
 	return ses.rm.baseService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount)
 }
 
-func (ses *Session) getGlobalSysVars(ctx context.Context) (gSysVars map[string]interface{}, err error) {
+func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gSysVars map[string]interface{}, err error) {
 	var execResults []ExecResult
 
 	tenantInfo := ses.GetTenantInfo()
@@ -1361,7 +1509,7 @@ func (ses *Session) getGlobalSysVars(ctx context.Context) (gSysVars map[string]i
 	// get system variable from mo_mysql_compatibility mode
 	sqlForGetVariables := getSqlForGetSystemVariablesWithAccount(uint64(tenantInfo.GetTenantID()))
 
-	if execResults, err = ExeSqlInBgSes(tenantCtx, ses, sqlForGetVariables); err != nil {
+	if execResults, err = ExeSqlInBgSes(tenantCtx, bh, sqlForGetVariables); err != nil {
 		return
 	}
 
@@ -1504,7 +1652,7 @@ func (ses *Session) StatusSession() *status.Session {
 // getStatusAfterTxnIsEnded
 // !!! only used after the txn is ended.
 // it may be called in the active txn. so, we
-func (ses *Session) getStatusAfterTxnIsEnded(ctx context.Context) uint16 {
+func (ses *Session) getStatusAfterTxnIsEnded() uint16 {
 	return extendStatus(ses.GetTxnHandler().GetServerStatus())
 }
 
@@ -1701,7 +1849,7 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	parameters := getPu(ses.GetService()).SV
 
 	//all offspring related to the request inherit the txnCtx
-	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(ses.GetTxnHandler().GetTxnCtx(), parameters.SessionTimeout.Duration)
+	cancelRequestCtx, cancelRequestFunc := context.WithTimeoutCause(ses.GetTxnHandler().GetTxnCtx(), parameters.SessionTimeout.Duration, moerr.CauseMigrate)
 	defer cancelRequestFunc()
 	ses.UpdateDebugString()
 	tenant := ses.GetTenantInfo()
@@ -1724,7 +1872,7 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 
 	dbm := newDBMigration(req.DB)
 	if err := dbm.Migrate(ctx, ses); err != nil {
-		return err
+		return moerr.AttachCause(ctx, err)
 	}
 
 	var maxStmtID uint32
@@ -1734,7 +1882,7 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 		}
 		pm := newPrepareStmtMigration(p.Name, p.SQL, p.ParamTypes)
 		if err := pm.Migrate(ctx, ses); err != nil {
-			return err
+			return moerr.AttachCause(ctx, err)
 		}
 		id := parsePrepareStmtID(p.Name)
 		if id > maxStmtID {
@@ -1855,4 +2003,224 @@ func appendTraceField(fields []zap.Field, ctx context.Context) []zap.Field {
 		fields = append(fields, trace.ContextField(ctx))
 	}
 	return fields
+}
+
+func whetherNeedCheckExpired(ctx context.Context, ses *Session) (int, error) {
+	var (
+		defaultPasswordLifetime int
+		err                     error
+	)
+	defaultPasswordLifetime, err = getPasswordLifetime(ctx, ses)
+	if err != nil {
+		return 0, err
+	}
+	return defaultPasswordLifetime, nil
+}
+
+func checkPasswordExpired(defPwdLifeTime int, lastChangedTime string) (bool, error) {
+	var (
+		err         error
+		lastChanged time.Time
+	)
+
+	if defPwdLifeTime <= 0 {
+		return false, nil
+	}
+
+	// get the last password change time as utc time
+	lastChanged, err = time.ParseInLocation("2006-01-02 15:04:05", lastChangedTime, time.UTC)
+	if err != nil {
+		return false, err
+	}
+
+	// get the current time as utc time
+	now := time.Now().UTC()
+	if lastChanged.AddDate(0, 0, defPwdLifeTime).Before(now) {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+func getPasswordLifetime(ctx context.Context, ses *Session) (int, error) {
+	value, err := ses.GetGlobalSysVar(DefaultPasswordLifetime)
+	if err != nil {
+		return 0, err
+	}
+
+	lifetime, ok := value.(int64)
+	if !ok {
+		return 0, moerr.NewInternalErrorf(ctx, "invalid value for %s", DefaultPasswordLifetime)
+	}
+
+	return int(lifetime), nil
+}
+
+func checkLockTimeExpired(ctx context.Context, ses *Session, lockTime string) (bool, error) {
+	var (
+		maxDelay int64
+		err      error
+		lt       time.Time
+	)
+
+	// get the lock time as utc time
+	lt, err = time.ParseInLocation("2006-01-02 15:04:05", lockTime, time.UTC)
+	if err != nil {
+		return false, err
+	}
+
+	// get the max connection delay
+	maxDelay, err = getLoginMaxDelay(ctx, ses)
+	if err != nil {
+		return false, err
+	}
+
+	// get the current time as utc time
+	now := time.Now().UTC()
+	if lt.Add(time.Duration(maxDelay) * time.Millisecond).After(now) {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func getLoginAttempts(ctx context.Context, ses *Session) (int64, error) {
+	value, err := ses.GetGlobalSysVar(ConnectionControlFailedConnectionsThreshold)
+	if err != nil {
+		return 0, err
+	}
+
+	attempts, ok := value.(int64)
+	if !ok {
+		return 0, moerr.NewInternalErrorf(ctx, "invalid value for %s", ConnectionControlFailedConnectionsThreshold)
+	}
+
+	return attempts, nil
+}
+
+func getLoginMaxDelay(ctx context.Context, ses *Session) (int64, error) {
+	value, err := ses.GetGlobalSysVar(ConnectionControlMaxConnectionDelay)
+	if err != nil {
+		return 0, err
+	}
+
+	delay, ok := value.(int64)
+	if !ok {
+		return 0, moerr.NewInternalErrorf(ctx, "invalid value for %s", ConnectionControlMaxConnectionDelay)
+	}
+
+	return delay, nil
+}
+
+func whetherNeedCheckLoginAttempts(ctx context.Context, ses *Session) (bool, error) {
+	var (
+		loginMaxTimes int64
+		err           error
+		loginMaxDelay int64
+	)
+	loginMaxTimes, err = getLoginAttempts(ctx, ses)
+	if err != nil {
+		return false, err
+	}
+
+	loginMaxDelay, err = getLoginMaxDelay(ctx, ses)
+	if err != nil {
+		return false, err
+	}
+	return loginMaxTimes > 0 && loginMaxDelay > 0, nil
+}
+
+func setUserUnlock(ctx context.Context, userName string, bh BackgroundExec) error {
+	var (
+		sql string
+		err error
+	)
+	sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func increaseLoginAttempts(ctx context.Context, userName string, bh BackgroundExec) error {
+	var (
+		sql string
+		err error
+	)
+	sql = getSqlForUpdateLoginAttemptsOfUser(userName)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func updateLockTime(ctx context.Context, userName string, bh BackgroundExec) error {
+	var (
+		sql string
+		err error
+	)
+	sql = getSqlForUpdateLockTimeOfUser(userName)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func setUserLock(ctx context.Context, userName string, bh BackgroundExec) error {
+	var (
+		sql string
+		err error
+	)
+	sql = getSqlForUpdateStatusLockOfUser(userStatusLock, userName)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func whetherNeedToCheckIp(ses *Session) (bool, error) {
+	var (
+		ValidnodeVal interface{}
+		err          error
+	)
+	ValidnodeVal, err = ses.GetGlobalSysVar(ValidnodeChecking)
+	if err != nil {
+		return false, err
+	}
+
+	validatePasswordConfig, ok := ValidnodeVal.(int8)
+	if !ok || validatePasswordConfig != 1 {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func whetherValidIpInInvitedNodes(ctx context.Context, ses *Session, clientAddr string) error {
+	var (
+		invitedNodesVal interface{}
+		err             error
+		ip              string
+	)
+
+	invitedNodesVal, err = ses.GetGlobalSysVar(InvitedNodes)
+	if err != nil {
+		return err
+	}
+	invitedNodes, ok := invitedNodesVal.(string)
+	if !ok {
+		return moerr.NewInternalErrorf(ctx, "invalid value for %s", InvitedNodes)
+	}
+
+	// get the ip address of the client
+	ip, _, err = net.SplitHostPort(clientAddr)
+	if err != nil {
+		return err
+	}
+
+	return checkValidIpInInvitedNodes(ctx, invitedNodes, ip)
 }

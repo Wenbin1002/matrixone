@@ -68,6 +68,8 @@ type Routine struct {
 
 	restricted atomic.Bool
 
+	expired atomic.Bool
+
 	printInfoOnce bool
 
 	mc *migrateController
@@ -87,6 +89,14 @@ func (rt *Routine) setResricted(val bool) {
 
 func (rt *Routine) isRestricted() bool {
 	return rt.restricted.Load()
+}
+
+func (rt *Routine) setExpired(val bool) {
+	rt.expired.Store(val)
+}
+
+func (rt *Routine) isExpired() bool {
+	return rt.expired.Load()
 }
 
 func (rt *Routine) increaseCount(counter func()) {
@@ -263,7 +273,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 
 	parameters := rt.getParameters()
 	//all offspring related to the request inherit the txnCtx
-	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(ses.GetTxnHandler().GetTxnCtx(), parameters.SessionTimeout.Duration)
+	cancelRequestCtx, cancelRequestFunc := context.WithTimeoutCause(ses.GetTxnHandler().GetTxnCtx(), parameters.SessionTimeout.Duration, moerr.CauseHandleRequest)
 	rt.setCancelRequestFunc(cancelRequestFunc)
 	ses.EnterFPrint(FPHandleRequest)
 	defer ses.ExitFPrint(FPHandleRequest)
@@ -285,6 +295,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 
 	execCtx.reqCtx = tenantCtx
 	if resp, err = ExecRequest(ses, &execCtx, req); err != nil {
+		err = moerr.AttachCause(tenantCtx, err)
 		if !skipClientQuit(err.Error()) {
 			ses.Error(tenantCtx,
 				"Failed to execute request",
@@ -294,6 +305,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 
 	if resp != nil {
 		if err = rt.getProtocol().WriteResponse(tenantCtx, resp); err != nil {
+			err = moerr.AttachCause(tenantCtx, err)
 			if resp.isIssue3482 {
 				ses.Error(tenantCtx,
 					"Failed to send response",

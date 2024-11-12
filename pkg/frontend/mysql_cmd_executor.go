@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -217,6 +218,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		requestAt = time.Now()
 	}
 
+	stm.ConnectionId = ses.GetConnectionID()
 	stm.Account = tenant.GetTenant()
 	stm.RoleId = proc.GetSessionInfo().RoleId
 	stm.User = tenant.GetUser()
@@ -347,7 +349,10 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 	txnOp := ses.GetTxnHandler().GetTxn()
 	ctx := execCtx.reqCtx
 
-	subMeta, err := getSubscriptionMeta(ctx, stmt.DbName, ses, txnOp)
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+
+	subMeta, err := getSubscriptionMeta(ctx, stmt.DbName, ses, txnOp, bh)
 	if err != nil {
 		return err
 	}
@@ -370,7 +375,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		sql := getSqlForRoleNameOfRoleId(int64(roleId))
 
 		var rets []ExecResult
-		if rets, err = executeSQLInBackgroundSession(ctx, ses, sql); err != nil {
+		if rets, err = executeSQLInBackgroundSession(ctx, bh, sql); err != nil {
 			return "", err
 		}
 
@@ -478,7 +483,9 @@ func doUse(ctx context.Context, ses FeSession, db string) (err error) {
 	}
 
 	if dbMeta.IsSubscription(ctx) {
-		if _, err = checkSubscriptionValid(ctx, ses, db); err != nil {
+		bh := ses.GetShareTxnBackgroundExec(ctx, false)
+		defer bh.Close()
+		if _, err = checkSubscriptionValid(ctx, ses, db, bh); err != nil {
 			return
 		}
 	}
@@ -1128,6 +1135,7 @@ func createPrepareStmt(
 		sqlSourceTypes := execCtx.input.getSqlSourceTypes()
 		prepareStmt.IsCloudNonuser = slices.Contains(sqlSourceTypes, constant.CloudNoUserSql)
 	}
+	prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
 	return prepareStmt, nil
 }
 
@@ -1726,11 +1734,13 @@ func doShowBackendServers(ses *Session, execCtx *ExecCtx) error {
 	labels["account"] = tenant
 	se = clusterservice.NewSelector().SelectByLabel(
 		filterLabels(labels), clusterservice.Contain)
+	moc := clusterservice.GetMOCluster(ses.GetService())
+	moc.ForceRefresh(true)
 	if isSysTenant(tenant) {
 		u := ses.GetTenantInfo().GetUser()
 		// For super use dump and root, we should list all servers.
 		if isSuperUser(u) {
-			clusterservice.GetMOCluster(ses.GetService()).GetCNService(
+			moc.GetCNService(
 				clusterservice.NewSelectAll(), func(s metadata.CNService) bool {
 					appendFn(&s)
 					return true
@@ -2141,13 +2151,14 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 	if ses.GetTenantInfo() != nil {
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
 
-		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() {
-			logutil.Infof("account %d routine %d is restricted, can not execute the statement", ses.GetAccountId(), ses.getRoutine().getConnectionID())
-		}
-
 		// can or not execute in retricted status
 		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() && !ses.GetPrivilege().canExecInRestricted {
-			return moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+			return moerr.NewInternalError(reqCtx, "do not have enough storage to execute the statement")
+		}
+
+		// can or not execute in password expired status
+		if ses.getRoutine() != nil && ses.getRoutine().isExpired() && !ses.GetPrivilege().canExecInPasswordExpired {
+			return moerr.NewInternalError(reqCtx, "password has expired, please change the password")
 		}
 
 		havePrivilege, err = authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(reqCtx, ses, stmt)
@@ -2556,6 +2567,7 @@ func executeStmtWithIncrStmt(ses FeSession,
 	execCtx *ExecCtx,
 	txnOp TxnOperator,
 ) (err error) {
+	var hasRecovered bool
 	ses.EnterFPrint(FPExecStmtWithIncrStmt)
 	defer ses.ExitFPrint(FPExecStmtWithIncrStmt)
 
@@ -2573,8 +2585,10 @@ func executeStmtWithIncrStmt(ses FeSession,
 
 	crs := new(perfcounter.CounterSet)
 	newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, crs)
-	err = txnOp.GetWorkspace().IncrStatementID(newCtx, false)
-	if err != nil {
+	err, hasRecovered = ExecuteFuncWithRecover(func() error {
+		return txnOp.GetWorkspace().IncrStatementID(newCtx, false)
+	})
+	if err != nil || hasRecovered {
 		return err
 	}
 	stats := statistic.StatsInfoFromContext(newCtx)
@@ -3162,10 +3176,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		ses.SetCmd(COM_STMT_EXECUTE)
 		var prepareStmt *PrepareStmt
 		sql, prepareStmt, err = parseStmtExecute(execCtx.reqCtx, ses, req.GetData().([]byte))
-		execCtx.prepareColDef = prepareStmt.ColDefData
 		if err != nil {
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
+		execCtx.prepareColDef = prepareStmt.ColDefData
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err)
@@ -3607,11 +3621,11 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 			int64(statsInfo.PlanStage.PlanDuration) +
 			int64(statsInfo.CompileStage.CompileDuration) +
 			statsInfo.PrepareRunStage.ScopePrepareDuration +
-			statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
+			statsInfo.PrepareRunStage.CompilePreRunOnceDuration - statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock -
 			(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
 		if totalTime < 0 {
-			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
+			ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
 				uuid.UUID(h.stmt.StatementID).String(),
 				h.stmt.StatementType,
 				statsInfo.ParseStage.ParseDuration,
@@ -3619,6 +3633,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 				statsInfo.CompileStage.CompileDuration,
 				operatorTimeConsumed,
 				statsInfo.PrepareRunStage.ScopePrepareDuration+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
+				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock,
 				statsInfo.IOAccessTimeConsumption,
 				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption,
 				totalTime,

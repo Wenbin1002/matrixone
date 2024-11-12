@@ -376,6 +376,12 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 	return find
 }
 
+func (cc *CatalogCache) GetStartTS() types.TS {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	return cc.mu.start
+}
+
 func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 	var find bool
 
@@ -846,5 +852,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		ClusterBy:     clusterByDef,
 		Indexes:       indexes,
 		Version:       tblItem.Version,
+		DbId:          tblItem.DatabaseId,
 	}, tableDef
 }

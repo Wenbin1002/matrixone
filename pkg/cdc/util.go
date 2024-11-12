@@ -536,7 +536,7 @@ var openDbConn = func(
 	user, password string,
 	ip string,
 	port int) (db *sql.DB, err error) {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?readTimeout=30s&timeout=30s&writeTimeout=30s",
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?readTimeout=10m&timeout=10m&writeTimeout=10m&multiStatements=true",
 		user,
 		password,
 		ip,
@@ -549,7 +549,7 @@ var openDbConn = func(
 		v2.CdcMysqlConnErrorCounter.Inc()
 		time.Sleep(time.Second)
 	}
-	logutil.Error("^^^^^ openDbConn failed")
+	logutil.Error("cdc task openDbConn failed")
 	return
 }
 
@@ -599,7 +599,7 @@ var GetTxn = func(
 
 var FinishTxnOp = func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {
 	//same timeout value as it in frontend
-	ctx2, cancel := context.WithTimeout(ctx, cnEngine.Hints().CommitOrRollbackTimeout)
+	ctx2, cancel := context.WithTimeoutCause(ctx, cnEngine.Hints().CommitOrRollbackTimeout, moerr.CauseFinishTxnOp)
 	defer cancel()
 	if inputErr != nil {
 		_ = txnOp.Rollback(ctx2)

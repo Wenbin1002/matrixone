@@ -261,7 +261,7 @@ func Test_mce(t *testing.T) {
 
 		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 		defer sysVarStubs.Reset()
-		_ = ses.InitSystemVariables(ctx)
+		_ = ses.InitSystemVariables(ctx, nil)
 
 		ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
 
@@ -435,7 +435,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		})
 		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 		defer sysVarStubs.Reset()
-		_ = ses.InitSystemVariables(ctx)
+		_ = ses.InitSystemVariables(ctx, nil)
 
 		err = handleCmdFieldList(ses, ec, cflStmt)
 		convey.So(err, convey.ShouldBeNil)
@@ -744,7 +744,7 @@ func Test_handleShowVariables(t *testing.T) {
 
 		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
 		defer sysVarStubs.Reset()
-		_ = ses.InitSystemVariables(ctx)
+		_ = ses.InitSystemVariables(ctx, nil)
 
 		proto.SetSession(ses)
 		ec := newTestExecCtx(ctx, ctrl)
@@ -1279,6 +1279,52 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, "s1", row[0])
 				require.Equal(t, "addr1", row[1])
+			})
+
+			convey.Convey("filter label sys account", t, func() {
+				ses.mrs = &MysqlResultSet{}
+				cluster := clusterservice.NewMOCluster(
+					sid,
+					nil,
+					0,
+					clusterservice.WithDisableRefresh(),
+					clusterservice.WithServices(
+						[]metadata.CNService{
+							{
+								ServiceID:  "s1",
+								SQLAddress: "addr1",
+								Labels: map[string]metadata.LabelList{
+									"account": {Labels: []string{"t1"}},
+								},
+								WorkState: metadata.WorkState_Working,
+							},
+							{
+								ServiceID:  "s2",
+								SQLAddress: "addr2",
+								Labels: map[string]metadata.LabelList{
+									"account": {Labels: []string{"t2"}},
+								},
+								WorkState: metadata.WorkState_Working,
+							},
+							{
+								ServiceID:  "s3",
+								SQLAddress: "addr3",
+								WorkState:  metadata.WorkState_Working,
+							},
+						},
+						nil,
+					),
+				)
+				runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.ClusterService, cluster)
+				ses.SetTenantInfo(&TenantInfo{Tenant: "sys", User: "dump"})
+				proto.connectAttrs = map[string]string{}
+				ec := newTestExecCtx(ctx, ctrl)
+
+				err = handleShowBackendServers(ses, ec)
+				require.NoError(t, err)
+				rs := ses.GetMysqlResultSet()
+				require.Equal(t, uint64(4), rs.GetColumnCount())
+				require.Equal(t, uint64(3), rs.GetRowCount())
 			})
 		},
 	)

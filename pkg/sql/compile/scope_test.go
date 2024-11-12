@@ -498,3 +498,76 @@ func TestRemoveStringBetween(t *testing.T) {
 		require.Equal(t, c.output, removeStringBetween(c.input, "/*", "*/"))
 	}
 }
+
+type fakeStreamSender2 struct {
+	morpc.Stream
+	number int
+}
+
+func (s *fakeStreamSender2) Close(_ bool) error {
+	s.number++
+	return nil
+}
+
+func TestNotifyMessageClean(t *testing.T) {
+	proc := testutil.NewProcess()
+
+	ff := &fakeStreamSender2{
+		number: 0,
+	}
+	sender := &messageSenderOnClient{
+		streamSender: ff,
+		safeToClose:  true,
+	}
+	// no matter error happens or not, clean method should close the sender.
+	n1 := notifyMessageResult{
+		sender: sender,
+		err:    moerr.NewInternalErrorNoCtx("there is an error."),
+	}
+	n2 := notifyMessageResult{
+		sender: sender,
+		err:    nil,
+	}
+
+	n1.clean(proc)
+	require.Equal(t, 1, ff.number)
+
+	n2.clean(proc)
+	require.Equal(t, 2, ff.number)
+}
+
+func TestScopeHoldAnyCannotRemoteOperator(t *testing.T) {
+	s0 := &Scope{
+		RootOp: &dispatch.Dispatch{RecCTE: false},
+	}
+	s1 := &Scope{
+		RootOp: &dispatch.Dispatch{RecCTE: true},
+	}
+	s2 := &Scope{
+		RootOp: &dispatch.Dispatch{RecCTE: false},
+	}
+	s0.PreScopes = []*Scope{s1, s2}
+
+	require.NotNil(t, s1.holdAnyCannotRemoteOperator())
+	require.NotNil(t, s0.holdAnyCannotRemoteOperator())
+	require.Nil(t, s2.holdAnyCannotRemoteOperator())
+}
+
+func TestCleanPipelineWitchStartFail(t *testing.T) {
+	s := &Scope{
+		Proc: testutil.NewProcess(),
+	}
+	s.Proc.BuildPipelineContext(context.Background())
+	op := connector.NewArgument()
+	op.Reg = &process.WaitRegister{
+		Ch2: make(chan process.PipelineSignal, 1),
+	}
+	s.RootOp = op
+
+	cleanPipelineWitchStartFail(s, moerr.NewInternalErrorNoCtx("test cleanPipelineWitchStartFail"), false)
+
+	require.Equal(t, 1, len(op.Reg.Ch2))
+	signal := <-op.Reg.Ch2
+	_, err := signal.Action()
+	require.Error(t, err)
+}

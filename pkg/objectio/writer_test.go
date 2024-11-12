@@ -78,7 +78,7 @@ func TestNewObjectWriter(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
-	defer service.Close()
+	defer service.Close(ctx)
 
 	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)
 	assert.Nil(t, err)
@@ -165,7 +165,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.True(t, nb0 == pool.CurrNB())
 
 	fs := NewObjectFS(service, dir)
-	dirs, err := fs.ListDir("")
+	dirs, err := fileservice.SortedList(fs.ListDir(""))
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(dirs))
 	objectReader, err = NewObjectReaderWithStr(name, service)
@@ -299,7 +299,7 @@ func TestNewObjectReader(t *testing.T) {
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
-	defer service.Close()
+	defer service.Close(ctx)
 
 	objectWriter, err := NewObjectWriterSpecial(WriterNormal, name, service)
 	assert.Nil(t, err)

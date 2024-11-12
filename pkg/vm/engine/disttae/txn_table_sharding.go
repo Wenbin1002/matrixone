@@ -597,7 +597,7 @@ func (r *shardingLocalReader) close() error {
 			r.lrd.Close()
 		}
 		if r.remoteRelData != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*10, moerr.CauseShardingLocalReader)
 			defer cancel()
 
 			err := r.tblDelegate.forwardRead(
@@ -610,7 +610,7 @@ func (r *shardingLocalReader) close() error {
 				},
 			)
 			if err != nil {
-				return err
+				return moerr.AttachCause(ctx, err)
 			}
 		}
 	}
@@ -1008,12 +1008,18 @@ func (tbl *txnTableDelegate) hasAllLocalReplicas() (bool, error) {
 }
 
 func (tbl *txnTableDelegate) getReadRequest(
+	ctx context.Context,
 	method int,
 	apply func([]byte),
 ) (shardservice.ReadRequest, error) {
 	processInfo, err := tbl.origin.proc.Load().BuildProcessInfo(
 		tbl.origin.createSql,
 	)
+	if err != nil {
+		return shardservice.ReadRequest{}, err
+	}
+
+	createdInTx, err := tbl.origin.isCreatedInTxn(ctx)
 	if err != nil {
 		return shardservice.ReadRequest{}, err
 	}
@@ -1028,7 +1034,7 @@ func (tbl *txnTableDelegate) getReadRequest(
 				DatabaseName: tbl.origin.db.databaseName,
 				AccountID:    uint64(tbl.origin.accountId),
 				TableName:    tbl.origin.tableName,
-				CreatedInTxn: tbl.origin.isCreatedInTxn(),
+				CreatedInTxn: createdInTx,
 			},
 		},
 		Apply: apply,
@@ -1079,6 +1085,7 @@ func (tbl *txnTableDelegate) forwardRead(
 	apply func([]byte),
 ) error {
 	request, err := tbl.getReadRequest(
+		ctx,
 		method,
 		apply,
 	)

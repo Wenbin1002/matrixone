@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -80,7 +80,6 @@ var (
 	insertIntoSingleIndexTableWithoutPKeyFormat = "insert into  `%s`.`%s` select (%s) from `%s`.`%s` where (%s) is not null;"
 	insertIntoIndexTableWithoutPKeyFormat       = "insert into  `%s`.`%s` select serial(%s) from `%s`.`%s` where serial(%s) is not null;"
 	insertIntoMasterIndexTableFormat            = "insert into  `%s`.`%s` select serial_full('%s', %s, %s), %s from `%s`.`%s`;"
-	createIndexTableForamt                      = "create table `%s`.`%s` (%s);"
 )
 
 var (
@@ -95,6 +94,10 @@ var (
 )
 
 var (
+	dropTableBeforeDropDatabase = "drop table if exists `%v`.`%v`;"
+)
+
+var (
 	deleteMoTablePartitionsWithDatabaseIdFormat = `delete from mo_catalog.mo_table_partitions where database_id = %v;`
 	deleteMoTablePartitionsWithTableIdFormat    = `delete from mo_catalog.mo_table_partitions where table_id = %v;`
 	//deleteMoTablePartitionsWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_table_partitions where table_id = %v and name = '%s';`
@@ -103,126 +106,6 @@ var (
 var (
 	insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` SELECT f.* FROM `%s`.`%s` AS %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) AS f;"
 )
-
-// genCreateIndexTableSql: Generate ddl statements for creating index table
-func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
-	var sql string
-	planCols := indexTableDef.GetCols()
-	for i, planCol := range planCols {
-		if i >= 1 {
-			sql += ","
-		}
-		sql += planCol.Name + " "
-		typeId := types.T(planCol.Typ.Id)
-		switch typeId {
-		case types.T_bit:
-			sql += fmt.Sprintf("BIT(%d)", planCol.Typ.Width)
-		case types.T_char:
-			sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
-		case types.T_varchar:
-			sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
-		case types.T_binary:
-			sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
-		case types.T_varbinary:
-			sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
-		case types.T_decimal64:
-			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
-		case types.T_decimal128:
-			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
-		default:
-			sql += typeId.String()
-		}
-		if i == 0 {
-			sql += " primary key"
-		}
-	}
-	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
-}
-
-// genCreateIndexTableSql: Generate ddl statements for creating index table
-func genCreateIndexTableSqlForFullTextIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
-	var sql string
-	planCols := indexTableDef.GetCols()
-	for i, planCol := range planCols {
-		if planCol.Name == catalog.CPrimaryKeyColName || planCol.Name == catalog.FakePrimaryKeyColName {
-			continue
-		}
-		if i >= 1 {
-			sql += ","
-		}
-		sql += planCol.Name + " "
-		typeId := types.T(planCol.Typ.Id)
-		switch typeId {
-		case types.T_bit:
-			sql += fmt.Sprintf("BIT(%d)", planCol.Typ.Width)
-		case types.T_char:
-			sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
-		case types.T_varchar:
-			sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
-		case types.T_binary:
-			sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
-		case types.T_varbinary:
-			sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
-		case types.T_decimal64:
-			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
-		case types.T_decimal128:
-			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
-		default:
-			sql += typeId.String()
-		}
-	}
-
-	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
-}
-
-// genCreateIndexTableSqlForIvfIndex: Generate ddl statements for creating ivf index table
-// NOTE: Here the columns are part of meta, centroids, entries table.
-// meta      -> key varchar(65535), value varchar(65535)
-// centroids -> version int64, centroid_id int64, centroid vecf32(xx)
-// entries   -> version int64, entry_id int64, pk xx
-// TODO: later on merge with genCreateIndexTableSql
-func genCreateIndexTableSqlForIvfIndex(indexTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
-	var sql string
-	planCols := indexTableDef.GetCols()
-	for i, planCol := range planCols {
-		if planCol.Name == catalog.CPrimaryKeyColName {
-			continue
-		}
-		if i >= 1 {
-			sql += ","
-		}
-		sql += "`" + planCol.Name + "`" + " "
-		typeId := types.T(planCol.Typ.Id)
-		switch typeId {
-		case types.T_char:
-			sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
-		case types.T_varchar:
-			sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
-		case types.T_binary:
-			sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
-		case types.T_varbinary:
-			sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
-		case types.T_decimal64:
-			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
-		case types.T_decimal128:
-			sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
-		case types.T_array_float32:
-			sql += fmt.Sprintf("VECF32(%d)", planCol.Typ.Width)
-		case types.T_array_float64:
-			sql += fmt.Sprintf("VECF64(%d)", planCol.Typ.Width)
-		default:
-			sql += typeId.String()
-		}
-
-	}
-
-	if indexTableDef.Pkey != nil && indexTableDef.Pkey.Names != nil {
-		pkStr := fmt.Sprintf(", primary key ( %s ) ", partsToColsStr(indexTableDef.Pkey.Names))
-		sql += pkStr
-	}
-
-	return fmt.Sprintf(createIndexTableForamt, DBName, indexDef.IndexTableName, sql)
-}
 
 // genInsertIndexTableSql: Generate an insert statement for inserting data into the index table
 func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string, isUnique bool) string {
@@ -319,11 +202,11 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 		switch def := constraint.(type) {
 		case *engine.IndexDef:
 			for _, indexDef := range def.Indexes {
-				ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
+				ctx, cancelFunc := context.WithTimeoutCause(proc.Ctx, time.Second*30, moerr.CauseGenInsertMOIndexesSql)
 				indexId, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
 				cancelFunc()
 				if err != nil {
-					return "", err
+					return "", moerr.AttachCause(ctx, err)
 				}
 
 				for i, part := range indexDef.Parts {
@@ -403,11 +286,11 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 				}
 			}
 		case *engine.PrimaryKeyDef:
-			ctx, cancelFunc := context.WithTimeout(proc.Ctx, time.Second*30)
+			ctx, cancelFunc := context.WithTimeoutCause(proc.Ctx, time.Second*30, moerr.CauseGenInsertMOIndexesSql2)
 			index_id, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
 			cancelFunc()
 			if err != nil {
-				return "", err
+				return "", moerr.AttachCause(ctx, err)
 			}
 			if def.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 				for i, colName := range def.Pkey.Names {

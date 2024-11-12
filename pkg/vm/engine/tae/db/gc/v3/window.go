@@ -89,6 +89,10 @@ type GCWindow struct {
 	}
 }
 
+func (w *GCWindow) GetObjectStats() []objectio.ObjectStats {
+	return w.files
+}
+
 func (w *GCWindow) Clone() GCWindow {
 	w2 := *w
 	w2.files = make([]objectio.ObjectStats, len(w.files))
@@ -397,12 +401,17 @@ func (w *GCWindow) LoadBatchData(
 		return true, nil
 	}
 	bat.CleanOnlyData()
-	pint := "LoadBatchData is "
-	for _, s := range w.files {
-		pint += s.ObjectName().String() + ";"
-	}
-	logutil.Infof("%s", pint)
 	err := loader(ctx, w.fs, &w.files[0], bat, mp)
+	logger := logutil.Info
+	if err != nil {
+		logger = logutil.Error
+	}
+	logger(
+		"GCWindow-LoadBatchData",
+		zap.Int("cnt", len(w.files)),
+		zap.String("file", w.files[0].ObjectName().String()),
+		zap.Error(err),
+	)
 	if err != nil {
 		return false, err
 	}
@@ -450,7 +459,7 @@ func (w *GCWindow) replayData(
 }
 
 // ReadTable reads an s3 file and replays a GCWindow in memory
-func (w *GCWindow) ReadTable(ctx context.Context, name string, fs *objectio.ObjectFS) error {
+func (w *GCWindow) ReadTable(ctx context.Context, name string, fs fileservice.FileService) error {
 	var release1 func()
 	var buffer *batch.Batch
 	defer func() {
@@ -461,7 +470,7 @@ func (w *GCWindow) ReadTable(ctx context.Context, name string, fs *objectio.Obje
 	start, end, _ := blockio.DecodeGCMetadataFileName(name)
 	w.tsRange.start = start
 	w.tsRange.end = end
-	reader, err := blockio.NewFileReaderNoCache(fs.Service, name)
+	reader, err := blockio.NewFileReaderNoCache(fs, name)
 	if err != nil {
 		return err
 	}
@@ -505,7 +514,10 @@ func (w *GCWindow) Compare(
 			bat.CleanOnlyData()
 			done, err := loadfn(context.Background(), nil, nil, w.mp, bat)
 			if err != nil {
-				logutil.Errorf("load data error %v", err)
+				logutil.Error(
+					"GCWindow-Compre-Err",
+					zap.Error(err),
+				)
 				return err
 			}
 
@@ -538,7 +550,6 @@ func (w *GCWindow) Compare(
 	buildObjects(w, objects, w.LoadBatchData)
 	buildObjects(table, objects2, table.LoadBatchData)
 	if !w.compareObjects(objects, objects2) {
-		logutil.Infof("objects are not equal")
 		return objects, objects2, false
 	}
 	return objects, objects2, true
