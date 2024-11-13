@@ -1243,7 +1243,19 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	}
 
 	if txn.workspaceSize > 100*mpool.MB {
-		return nil, moerr.NewTxnErrorf(ctx, "workspace size is too large: %v", txn.workspaceSize)
+		size := 0
+		for _, e := range txn.writes {
+			if e.bat == nil || e.bat.RowCount() == 0 {
+				continue
+			}
+			size += e.bat.Size()
+		}
+		if size > 100*mpool.MB {
+			return nil, moerr.NewTxnErrorf(
+				ctx,
+				"workspace size is too large: statistical size %v, actual size %v",
+				txn.workspaceSize, size)
+		}
 	}
 
 	if err := txn.IncrStatementID(ctx, true); err != nil {
