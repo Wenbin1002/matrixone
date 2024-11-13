@@ -1250,11 +1250,16 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 			}
 			size += e.bat.Size()
 		}
+		logutil.Warnf(
+			"workspace size is too large: statistical size %v, actual size %v",
+			txn.workspaceSize, size,
+		)
 		if size > 100*mpool.MB {
 			return nil, moerr.NewTxnErrorf(
 				ctx,
 				"workspace size is too large: statistical size %v, actual size %v",
-				txn.workspaceSize, size)
+				txn.workspaceSize, size,
+			)
 		}
 	}
 
