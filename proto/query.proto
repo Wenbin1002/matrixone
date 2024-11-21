@@ -94,6 +94,8 @@ enum CmdMethod {
   FileServiceCacheEvict = 29;
   // MetadataCache handle metadata cache related operations
   MetadataCache = 30;
+  // FaultInjection handle fault injection request
+  FaultInjection = 31;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -229,6 +231,7 @@ message Request {
   FileServiceCacheRequest FileServiceCacheRequest = 31 [ (gogoproto.nullable) = false ];
   FileServiceCacheEvictRequest FileServiceCacheEvictRequest = 32 [ (gogoproto.nullable) = false ];
   MetadataCacheRequest MetadataCacheRequest = 33 [ (gogoproto.nullable) = false ];
+  FaultInjectionRequest FaultInjectionRequest = 34;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -288,6 +291,7 @@ message Response {
   FileServiceCacheResponse FileServiceCacheResponse = 31 [ (gogoproto.nullable) = false ];
   FileServiceCacheEvictResponse FileServiceCacheEvictResponse = 32 [ (gogoproto.nullable) = false ];
   MetadataCacheResponse MetadataCacheResponse = 33 [ (gogoproto.nullable) = false ];
+  FaultInjectionResponse FaultInjectionResponse = 34;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -598,4 +602,16 @@ message MetadataCacheRequest {
 
 message MetadataCacheResponse {
   int64 CacheCapacity = 1;
+}
+
+message FaultInjectionRequest {
+  string Name = 1;
+  string Freq = 2;
+  string Action = 3;
+  int64 Iarg = 4;
+  string Sarg = 5;
+}
+
+message FaultInjectionResponse {
+  string Resp = 1;
 }
