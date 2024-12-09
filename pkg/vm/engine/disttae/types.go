@@ -132,7 +132,8 @@ const (
 )
 
 const (
-	WorkspaceThreshold             uint64 = 1 * mpool.MB
+	WorkspaceThreshold             uint64 = 32 * mpool.MB
+	SkipTableThreshold             uint64 = 1 * mpool.MB
 	InsertEntryThreshold                  = 5000
 	GCBatchOfFileCount             int    = 1000
 	GCPoolSize                     int    = 5
@@ -185,6 +186,12 @@ func WithSQLExecFunc(f func() ie.InternalExecutor) EngineOptions {
 	}
 }
 
+func WithSkipTableThreshold(th uint64) EngineOptions {
+	return func(e *Engine) {
+		e.config.skipTableThreshold = th
+	}
+}
+
 type Engine struct {
 	sync.RWMutex
 	service  string
@@ -201,6 +208,8 @@ type Engine struct {
 	config struct {
 		workspaceThreshold  uint64
 		insertEntryMaxCount int
+
+		skipTableThreshold uint64
 
 		cnTransferTxnLifespanThreshold time.Duration
 

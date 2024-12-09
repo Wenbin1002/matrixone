@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 	"time"
 
@@ -519,9 +520,43 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 
 func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, size *uint64, pkCount *int) error {
 	mp := make(map[tableKey][]*batch.Batch)
+	tbSize := make(map[uint64]uint64)
+	skipTable := make(map[uint64]bool)
+
+	for i := offset; i < len(txn.writes); i++ {
+		if txn.writes[i].isCatalog() {
+			continue
+		}
+		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
+			continue
+		}
+		if txn.writes[i].typ != INSERT || txn.writes[i].fileName != "" {
+			continue
+		}
+
+		tbSize[txn.writes[i].tableId] += uint64(txn.writes[i].bat.Size())
+	}
+	keys := make([]uint64, 0, len(tbSize))
+	sort.Slice(keys, func(i, j int) bool {
+		return tbSize[keys[i]] < tbSize[keys[j]]
+	})
+	skipSize := uint64(0)
+	for _, tableId := range keys {
+		if skipSize+tbSize[tableId] > txn.engine.config.skipTableThreshold {
+			break
+		}
+		skipSize += tbSize[tableId]
+		skipTable[tableId] = true
+	}
+
 	lastWritesIndex := offset
 	writes := txn.writes
 	for i := offset; i < len(txn.writes); i++ {
+		if skipTable[txn.writes[i].tableId] {
+			writes[lastWritesIndex] = writes[i]
+			lastWritesIndex++
+			continue
+		}
 		if txn.writes[i].isCatalog() {
 			writes[lastWritesIndex] = writes[i]
 			lastWritesIndex++

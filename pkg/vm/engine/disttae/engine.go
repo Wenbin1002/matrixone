@@ -152,6 +152,9 @@ func (e *Engine) fillDefaults() {
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
 	}
+	if e.config.skipTableThreshold <= 0 {
+		e.config.skipTableThreshold = SkipTableThreshold
+	}
 
 	logutil.Info(
 		"INIT-ENGINE-CONFIG",
