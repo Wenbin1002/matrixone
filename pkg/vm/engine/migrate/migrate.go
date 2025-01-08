@@ -965,6 +965,11 @@ func replayDeletesHelper(
 	}
 
 	if sinker == nil {
+		logutil.Infof("replay deletes helper, no object to replay, dbId: %d, tblId: %d", dbId, tblId)
+		result <- tableDeletes{
+			dbId:  dbId,
+			tblId: tblId,
+		}
 		return
 	}
 
@@ -1064,6 +1069,9 @@ func ReplayDeletes(
 	duration := time.Now()
 	for i := 0; i < len(tblBlks); i++ {
 		dd := <-result
+		if dd.statsList == nil {
+			continue
+		}
 
 		for _, s := range dd.statsList {
 			destBat.GetVectorByName(catalog.PhyAddrColumnName).Append(objectio.HackObjid2Rowid(s.ObjectName().ObjectId()), false)
